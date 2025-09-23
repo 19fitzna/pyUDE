@@ -1,0 +1,14 @@
+[build-system]
+requires = ["flit_core >=3.11,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "pyUDE"
+authors = [{name = "Nathan Fitzpatrick", email = "nmf68@hawaii.edu"}]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version", "description"]
+
+[project.urls]
+Home = "https://github.com/19fitzna/pyUDE"
