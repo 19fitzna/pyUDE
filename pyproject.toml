@@ -8,7 +8,50 @@ authors = [{name = "Nathan Fitzpatrick", email = "nmf68@hawaii.edu"}]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+requires-python = ">=3.10"
 dynamic = ["version", "description"]
+dependencies = [
+    "torch>=2.0",
+    "torchdiffeq>=0.2",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+julia = [
+    "juliacall>=0.9",
+]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+    "ruff",
+]
+notebook = [
+    "jupyter>=1.0",
+    "scipy>=1.10",
+]
 
 [project.urls]
 Home = "https://github.com/19fitzna/pyUDE"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+markers = [
+    "integration: marks tests that require torchdiffeq (deselect with '-m not integration')",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.coverage.run]
+source = ["src/pyUDE"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true

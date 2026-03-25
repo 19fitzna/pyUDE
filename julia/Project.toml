@@ -1,0 +1,16 @@
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f15"
+Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
+Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+UniversalDiffEq = "6f4a6b11-f9d1-49d1-857e-c0ea70a71ea3"
+
+[compat]
+julia = "1.10"
+UniversalDiffEq = "0.3"
+Lux = "1"
+OrdinaryDiffEq = "6"
+Optimisers = "0.3"
+PythonCall = "0.9"
