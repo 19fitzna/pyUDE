@@ -1,0 +1,80 @@
+site_name: pyUDE
+site_description: Universal Differential Equations in Python
+site_url: https://19fitzna.github.io/pyUDE/
+repo_url: https://github.com/19fitzna/pyUDE
+repo_name: 19fitzna/pyUDE
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: installation.md
+      - Quickstart: guides/quickstart.md
+      - Core Concepts: concepts.md
+  - Guides:
+      - Choosing a Backend: choosing-backend.md
+      - Writing known_dynamics: guides/known-dynamics.md
+      - Julia Backend Setup: guides/julia-setup.md
+  - API Reference:
+      - NODE / JuliaNODE: api/node.md
+      - CustomDerivatives: api/custom_derivatives.md
+      - CustomDifferences: api/custom_differences.md
+      - Analysis Utilities: api/analysis.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+  - tables
+
+extra_javascript:
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/19fitzna/pyUDE
+
+plugins:
+  - search

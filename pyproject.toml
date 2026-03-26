@@ -34,6 +34,7 @@ notebook = [
 
 [project.urls]
 Home = "https://github.com/19fitzna/pyUDE"
+Documentation = "https://19fitzna.github.io/pyUDE/"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
