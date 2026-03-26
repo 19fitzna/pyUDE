@@ -89,6 +89,9 @@ model.train(
     patience: int | None = None,
     max_grad_norm: float = 10.0,
     weight_decay: float | None = None,
+    noise_scale: float = 0.01,
+    rtol: float = 1e-3,
+    atol: float = 1e-6,
 ) -> CustomDerivatives
 ```
 

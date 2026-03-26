@@ -52,6 +52,9 @@ model.train(
     patience: int | None = None,
     max_grad_norm: float = 10.0,
     weight_decay: float | None = None,
+    noise_scale: float = 0.01,
+    rtol: float = 1e-3,
+    atol: float = 1e-6,
 ) -> NODE
 ```
 
@@ -70,6 +73,9 @@ Fit the model to the training data. Returns `self` for chaining. Calling `train(
 | `patience` | `int \| None` | `None` | Early stopping: stop if loss does not improve for this many epochs. Best weights are restored on stop. |
 | `max_grad_norm` | `float` | `10.0` | Maximum gradient norm for clipping. Set to `0` to disable. Protects against exploding gradients during long-horizon integration. |
 | `weight_decay` | `float \| None` | `None` | L2 regularisation applied via the optimizer. Defaults to `1e-4` when `loss="derivative_matching"` and `0.0` for simulation. Pass an explicit float to override. |
+| `noise_scale` | `float` | `0.01` | Standard deviation of Gaussian noise injected into training states during derivative matching. Larger values encourage generalisation; set to `0.0` to disable. Only used when `loss="derivative_matching"`. |
+| `rtol` | `float` | `1e-3` | Relative tolerance for the adaptive ODE solver. Only used with `loss="simulation"` and adaptive solvers (`dopri5`, etc.). Increase to `1e-2` for faster warm-up training. |
+| `atol` | `float` | `1e-6` | Absolute tolerance for the adaptive ODE solver. Increase to `1e-4` alongside `rtol=1e-2` for faster warm-up training. |
 
 #### `forecast`
 
@@ -128,6 +134,27 @@ model.save("node_model.pt")
 
 The file stores the network state dict, training data, time column name, and solver. Requires
 the model to be trained first.
+
+#### `load_weights`
+
+```python
+model.load_weights(path: str) -> NODE
+```
+
+Load weights from a checkpoint written by `save()` into this model. The model architecture
+must match. After loading, `is_trained` is set to `True` and the model can be used for
+forecasting or continued training.
+
+```python
+model = ude.NODE(data, hidden_units=64, hidden_layers=3)
+model.load_weights("node_model.pt")
+future = model.forecast(steps=50)
+```
+
+> **Note:** Julia-backed models (`JuliaNODE`, etc.) do not support `save()` or
+> `load_weights()`. Trained parameters live inside a Julia struct and cannot be
+> serialised via PyTorch. Use `get_params()` to extract learned parameter values
+> and store them manually. See [Troubleshooting](../troubleshooting.md#julia-models-cannot-be-saved).
 
 ### Properties
 

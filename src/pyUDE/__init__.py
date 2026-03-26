@@ -8,6 +8,8 @@ from pyUDE.core.custom_derivatives import CustomDerivatives
 from pyUDE.core.custom_differences import CustomDifferences
 from pyUDE.analysis.forecast import forecast
 from pyUDE.analysis.dynamics import get_right_hand_side
+from pyUDE.utils.splitting import train_test_split, time_series_cv
+from pyUDE.analysis.metrics import score, mse, rmse, mae, r2_score
 
 __all__ = [
     "NODE",
@@ -15,11 +17,18 @@ __all__ = [
     "CustomDifferences",
     "forecast",
     "get_right_hand_side",
+    "train_test_split",
+    "time_series_cv",
+    "score",
+    "mse",
+    "rmse",
+    "mae",
+    "r2_score",
 ]
 
 # Julia backend — only available when juliacall is installed
 try:
     from pyUDE.julia import JuliaNODE, JuliaCustomDerivatives, JuliaCustomDifferences
     __all__ += ["JuliaNODE", "JuliaCustomDerivatives", "JuliaCustomDifferences"]
-except Exception:
+except ImportError:
     pass  # juliacall not installed or Julia environment not set up

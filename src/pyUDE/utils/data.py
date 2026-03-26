@@ -31,6 +31,11 @@ def tensors_to_dataframe(
     time_column: str = "time",
 ) -> pd.DataFrame:
     """Convert (t, u) tensors back to a DataFrame."""
+    if u.ndim != 2 or u.shape[1] != len(state_columns):
+        raise ValueError(
+            f"u has shape {tuple(u.shape)} but {len(state_columns)} "
+            f"state columns were provided."
+        )
     t_np = t.detach().cpu().numpy()
     u_np = u.detach().cpu().numpy()
     df = pd.DataFrame(u_np, columns=state_columns)

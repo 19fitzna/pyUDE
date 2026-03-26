@@ -6,11 +6,12 @@ import numpy as np
 import pandas as pd
 
 from pyUDE.utils.validation import validate_dataframe
+from pyUDE.julia._base import JuliaModelBase
 from pyUDE.julia._env import get_julia
 from pyUDE.julia._convert import df_to_julia, params_dict_to_julia
 
 
-class JuliaCustomDifferences:
+class JuliaCustomDifferences(JuliaModelBase):
     """
     Discrete-time hybrid UDE: user-supplied known map + Lux.jl neural network,
     backed by UniversalDiffEq.jl.
@@ -127,41 +128,3 @@ class JuliaCustomDifferences:
                 f"Original error: {e}"
             ) from e
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
-    def __repr__(self) -> str:
-        status = "trained" if self._is_trained else "untrained"
-        return (
-            f"{self.__class__.__name__}("
-            f"states={self._n_states}, "
-            f"columns={self._state_columns}, "
-            f"{status})"
-        )
-
-    @property
-    def data(self) -> pd.DataFrame:
-        return self._data
-
-    @property
-    def is_trained(self) -> bool:
-        return self._is_trained
-
-    @property
-    def n_states(self) -> int:
-        return self._n_states
-
-    @property
-    def state_columns(self) -> List[str]:
-        return list(self._state_columns)
-
-    @property
-    def time_column(self) -> str:
-        return self._time_column
-
-    def _require_trained(self) -> None:
-        if not self._is_trained:
-            raise RuntimeError(
-                "Model has not been trained yet. Call model.train() first."
-            )

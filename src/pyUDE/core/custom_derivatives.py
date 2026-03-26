@@ -88,13 +88,25 @@ class CustomDerivatives(UDEModel):
         hidden_units: int = 32,
         time_column: str = "time",
         device: str = "cpu",
+        dropout: float = 0.0,
+        param_bounds: Optional[Dict] = None,
     ):
+        if not (0.0 <= dropout < 1.0):
+            raise ValueError(f"dropout must be in [0, 1), got {dropout!r}.")
+        if param_bounds is not None:
+            extra = set(param_bounds) - set(init_params)
+            if extra:
+                raise ValueError(
+                    f"param_bounds contains keys not in init_params: {sorted(extra)}"
+                )
         super().__init__(data, time_column, device)
         self._known_dynamics = known_dynamics
         self._init_params = init_params
         self._network = network
         self._hidden_layers = hidden_layers
         self._hidden_units = hidden_units
+        self._dropout = dropout
+        self._param_bounds = param_bounds
         self._validate_known_dynamics()
 
     def _validate_known_dynamics(self) -> None:
@@ -112,11 +124,12 @@ class CustomDerivatives(UDEModel):
             )
 
     def _build_ode_func(self) -> nn.Module:
-        # Wrap mechanistic parameters as trainable nn.Parameters
-        param_dict = nn.ParameterDict({
-            k: nn.Parameter(torch.tensor(float(v), dtype=torch.float64))
-            for k, v in self._init_params.items()
-        })
+        # Store as instance variable so learned values survive if _ode_func is reset
+        if not hasattr(self, '_param_dict') or self._param_dict is None:
+            self._param_dict = nn.ParameterDict({
+                k: nn.Parameter(torch.tensor(float(v), dtype=torch.float64))
+                for k, v in self._init_params.items()
+            })
 
         if self._network is not None:
             net = self._network
@@ -126,11 +139,12 @@ class CustomDerivatives(UDEModel):
                 out_dim=self._n_states,
                 hidden_layers=self._hidden_layers,
                 hidden_units=self._hidden_units,
+                dropout=self._dropout,
             ).double()
 
-        return _CustomDerivativesFunc(self._known_dynamics, net, param_dict)
+        return _CustomDerivativesFunc(self._known_dynamics, net, self._param_dict)
 
     def get_params(self) -> Dict:
         """Return the current values of the mechanistic parameters."""
         self._require_trained()
-        return {k: v.item() for k, v in self._ode_func.params.items()}
+        return {k: v.item() for k, v in self._param_dict.items()}

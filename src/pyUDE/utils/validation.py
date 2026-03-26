@@ -18,7 +18,7 @@ def validate_dataframe(data: pd.DataFrame, time_column: str = "time") -> None:
     if len(state_cols) == 0:
         raise ValueError("DataFrame must have at least one state variable column.")
 
-    if data[time_column].is_monotonic_increasing is False:
+    if not data[time_column].is_monotonic_increasing:
         raise ValueError(f"Time column '{time_column}' must be monotonically increasing.")
 
     if data.isnull().any().any():
@@ -27,8 +27,13 @@ def validate_dataframe(data: pd.DataFrame, time_column: str = "time") -> None:
     if len(data) < 2:
         raise ValueError("DataFrame must have at least 2 time steps.")
 
-    # Check for non-numeric state columns
+    # Check for non-numeric columns (time and state)
     numeric_cols = data.select_dtypes(include='number').columns
+    if time_column not in numeric_cols:
+        raise ValueError(
+            f"Time column '{time_column}' must be numeric, "
+            f"got dtype {data[time_column].dtype}."
+        )
     non_numeric_state = [c for c in state_cols if c not in numeric_cols]
     if non_numeric_state:
         raise ValueError(f"Non-numeric state columns found: {non_numeric_state}")

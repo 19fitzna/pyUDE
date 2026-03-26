@@ -1,16 +1,17 @@
 """JuliaNODE — Neural ODE backed by UniversalDiffEq.jl."""
 
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional  # List kept for __init__ annotation
 
 import numpy as np
 import pandas as pd
 
 from pyUDE.utils.validation import validate_dataframe
+from pyUDE.julia._base import JuliaModelBase
 from pyUDE.julia._env import get_julia
 from pyUDE.julia._convert import df_to_julia, julia_forecast_to_df
 
 
-class JuliaNODE:
+class JuliaNODE(JuliaModelBase):
     """
     Neural ODE using UniversalDiffEq.jl as the backend.
 
@@ -176,32 +177,3 @@ class JuliaNODE:
 
         return rhs
 
-    # ------------------------------------------------------------------
-    # Properties (mirror pyUDE.core.base.UDEModel)
-    # ------------------------------------------------------------------
-
-    @property
-    def data(self) -> pd.DataFrame:
-        return self._data
-
-    @property
-    def is_trained(self) -> bool:
-        return self._is_trained
-
-    @property
-    def n_states(self) -> int:
-        return self._n_states
-
-    @property
-    def state_columns(self) -> List[str]:
-        return list(self._state_columns)
-
-    @property
-    def time_column(self) -> str:
-        return self._time_column
-
-    def _require_trained(self) -> None:
-        if not self._is_trained:
-            raise RuntimeError(
-                "Model has not been trained yet. Call model.train() first."
-            )
