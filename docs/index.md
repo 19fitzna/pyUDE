@@ -36,6 +36,7 @@ This lets you:
 - [Choosing a Backend](choosing-backend.md) — PyTorch vs Julia: when to use each
 - [Writing known_dynamics Functions](guides/known-dynamics.md) — tips and patterns
 - [Julia Backend Setup](guides/julia-setup.md) — installing Julia and UniversalDiffEq.jl
+- [GPU Acceleration](installation.md#gpu-support) — CUDA and MPS setup
 
 ### API Reference
 - [NODE / JuliaNODE](api/node.md) — pure neural ODE

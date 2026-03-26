@@ -91,17 +91,18 @@ class JuliaNODE:
         """
         jl, UDE = get_julia()
 
-        # Build Lux MLP
-        nn = jl.make_lux_mlp(
-            self._n_states, self._n_states,
-            self._hidden_units, self._hidden_layers,
-        )
+        if self._jl_model is None:
+            # Build Lux MLP
+            nn = jl.make_lux_mlp(
+                self._n_states, self._n_states,
+                self._hidden_units, self._hidden_layers,
+            )
 
-        # Convert data
-        t_jl, data_jl, _ = df_to_julia(self._data, self._time_column)
+            # Convert data
+            t_jl, data_jl, _ = df_to_julia(self._data, self._time_column)
 
-        # Construct UniversalDiffEq.NODE Julia struct
-        self._jl_model = UDE.NODE(data_jl, t_jl, neural_network=nn)
+            # Construct UniversalDiffEq.NODE Julia struct
+            self._jl_model = UDE.NODE(data_jl, t_jl, neural_network=nn)
 
         # Build optimizer
         jl_opt = jl.make_optimizer(optimizer, float(learning_rate))

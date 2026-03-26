@@ -19,6 +19,7 @@ NODE(
     hidden_layers: int = 2,
     hidden_units: int = 32,
     time_column: str = "time",
+    device: str = "cpu",
 )
 ```
 
@@ -29,6 +30,7 @@ NODE(
 | `hidden_layers` | `int` | `2` | Number of hidden layers in the default MLP. Ignored if `network` is provided. |
 | `hidden_units` | `int` | `32` | Units per hidden layer in the default MLP. |
 | `time_column` | `str` | `"time"` | Name of the time column in `data`. |
+| `device` | `str` | `"cpu"` | PyTorch device to train and run inference on. Accepts any string recognised by `torch.device`: `"cpu"`, `"cuda"`, `"cuda:0"`, `"mps"` (Apple Silicon). |
 
 The default MLP architecture is:
 `[n_states → hidden_units → … → hidden_units → n_states]` with `tanh` activations between
@@ -47,20 +49,27 @@ model.train(
     log_interval: int = 50,
     verbose: bool = True,
     solver: str = "dopri5",
+    patience: int | None = None,
+    max_grad_norm: float = 10.0,
+    weight_decay: float | None = None,
 ) -> NODE
 ```
 
-Fit the model to the training data. Returns `self` for chaining.
+Fit the model to the training data. Returns `self` for chaining. Calling `train()` a second time
+**continues** from the current weights — it does not reset the model.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `loss` | `str` | `"simulation"` | `"simulation"`: integrate ODE forward and compare to observations via MSE. `"derivative_matching"`: compare predicted derivatives to finite-difference estimates (faster but noisier). |
+| `loss` | `str` | `"simulation"` | `"simulation"`: integrate ODE forward and compare to observations via MSE. `"derivative_matching"`: estimate derivatives via cubic spline interpolation (falling back to finite differences if scipy is unavailable), then match predicted derivatives directly — no ODE integration required. |
 | `optimizer` | `str` | `"adam"` | `"adam"` or `"sgd"`. |
 | `learning_rate` | `float` | `1e-3` | Optimizer learning rate. |
 | `epochs` | `int` | `500` | Number of gradient steps. |
 | `log_interval` | `int` | `50` | Print loss every this many epochs (when `verbose=True`). |
 | `verbose` | `bool` | `True` | Print loss during training. |
-| `solver` | `str` | `"dopri5"` | torchdiffeq solver name. Options: `"dopri5"` (adaptive 4/5 RK), `"rk4"` (fixed 4th-order), `"euler"`, `"midpoint"`, `"rk4"`, `"explicit_adams"`. |
+| `solver` | `str` | `"dopri5"` | torchdiffeq solver name. Options: `"dopri5"` (adaptive 4/5 RK), `"rk4"` (fixed 4th-order), `"euler"`, `"midpoint"`, `"explicit_adams"`. Only used when `loss="simulation"`. |
+| `patience` | `int \| None` | `None` | Early stopping: stop if loss does not improve for this many epochs. Best weights are restored on stop. |
+| `max_grad_norm` | `float` | `10.0` | Maximum gradient norm for clipping. Set to `0` to disable. Protects against exploding gradients during long-horizon integration. |
+| `weight_decay` | `float \| None` | `None` | L2 regularisation applied via the optimizer. Defaults to `1e-4` when `loss="derivative_matching"` and `0.0` for simulation. Pass an explicit float to override. |
 
 #### `forecast`
 
@@ -104,6 +113,21 @@ sol = odeint(rhs, y0=u0, t=t_span)
 # Evaluate directly
 du = rhs(np.array([1.0, 0.5]), t=0.0)   # returns np.ndarray
 ```
+
+#### `save`
+
+```python
+model.save(path: str) -> None
+```
+
+Save the trained model weights and metadata to disk.
+
+```python
+model.save("node_model.pt")
+```
+
+The file stores the network state dict, training data, time column name, and solver. Requires
+the model to be trained first.
 
 ### Properties
 
@@ -233,6 +257,48 @@ class ResidualMLP(nn.Module):
 
 model = ude.NODE(data, network=ResidualMLP(2).double())
 model.train(epochs=500)
+```
+
+### Training on GPU
+
+```python
+import torch
+import pyUDE as ude
+
+# NVIDIA GPU
+model = ude.NODE(data, device="cuda")
+model.train(epochs=500)
+
+# Apple Silicon (MPS)
+model = ude.NODE(data, device="mps")
+model.train(epochs=500)
+
+# Check availability before choosing device
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = ude.NODE(data, device=device)
+```
+
+Forecast always returns a CPU `pd.DataFrame` regardless of device, so downstream code never
+needs to change.
+
+### Additive (incremental) training
+
+```python
+# Coarse first pass
+model = ude.NODE(data, hidden_units=64)
+model.train(epochs=200, learning_rate=1e-3)
+
+# Fine-tune — continues from existing weights
+model.train(epochs=500, learning_rate=1e-4)
+```
+
+### Early stopping
+
+```python
+model = ude.NODE(data)
+model.train(epochs=2000, patience=100)
+# Stops early if loss doesn't improve for 100 consecutive epochs
+# and restores the best weights found
 ```
 
 ### Julia NODE for stiff system

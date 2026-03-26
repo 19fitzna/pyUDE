@@ -63,8 +63,9 @@ class NODE(UDEModel):
         hidden_layers: int = 2,
         hidden_units: int = 32,
         time_column: str = "time",
+        device: str = "cpu",
     ):
-        super().__init__(data, time_column)
+        super().__init__(data, time_column, device)
         self._network = network
         self._hidden_layers = hidden_layers
         self._hidden_units = hidden_units

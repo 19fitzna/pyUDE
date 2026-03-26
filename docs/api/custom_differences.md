@@ -27,18 +27,20 @@ CustomDifferences(
     hidden_layers: int = 2,
     hidden_units: int = 32,
     time_column: str = "time",
+    device: str = "cpu",
 )
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `data` | `pd.DataFrame` | — | Discrete-time series data. |
-| `known_map` | `Callable` | — | `f(u, p, t) -> u_next`. See [signature details](#known_map-signature-pytorch) below. |
+| `known_map` | `Callable` | — | `f(u, p, t) -> u_next`. See [signature details](#known_map-signature-pytorch) below. Validated at construction time — an error is raised immediately if the function returns the wrong shape. |
 | `init_params` | `dict` | — | Initial mechanistic parameter values (str → float). Made trainable. |
 | `network` | `nn.Module \| None` | `None` | Neural network for unknown residual. |
 | `hidden_layers` | `int` | `2` | |
 | `hidden_units` | `int` | `32` | |
 | `time_column` | `str` | `"time"` | Name of the time column. |
+| `device` | `str` | `"cpu"` | PyTorch device: `"cpu"`, `"cuda"`, `"cuda:0"`, `"mps"`. |
 
 ### `known_map` Signature (PyTorch)
 
@@ -74,12 +76,15 @@ model.train(
     epochs: int = 500,
     log_interval: int = 50,
     verbose: bool = True,
+    patience: int | None = None,
+    max_grad_norm: float = 10.0,
 ) -> CustomDifferences
 ```
 
 Minimises one-step-ahead MSE: for each step `n`, predicts `u[n+1]` and compares to the
 observed `u[n+1]`. No ODE integration is involved, so this is faster per epoch than the
-continuous-time simulation loss.
+continuous-time simulation loss. Calling `train()` a second time **continues** from existing
+weights rather than resetting.
 
 Note: `loss` and `solver` parameters are not available for `CustomDifferences` — the training
 procedure is fixed as one-step-ahead MSE.
@@ -91,6 +96,8 @@ procedure is fixed as one-step-ahead MSE.
 | `epochs` | `int` | `500` | |
 | `log_interval` | `int` | `50` | Print every N epochs when `verbose=True`. |
 | `verbose` | `bool` | `True` | |
+| `patience` | `int \| None` | `None` | Early stopping: stop if loss doesn't improve for this many epochs. Best weights restored on stop. |
+| `max_grad_norm` | `float` | `10.0` | Maximum gradient norm for clipping. Set to `0` to disable. |
 
 #### `forecast`
 
@@ -110,6 +117,10 @@ model.get_params() -> dict
 ```
 
 Return learned mechanistic parameter values as `dict[str, float]`.
+
+> **Note**: `get_right_hand_side()` is **not** available on `CustomDifferences`. Discrete-time
+> models have no continuous ODE right-hand side. Calling it raises `NotImplementedError`. Use
+> `forecast()` to step the map forward instead.
 
 ### Properties
 

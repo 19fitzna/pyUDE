@@ -87,13 +87,29 @@ class CustomDerivatives(UDEModel):
         hidden_layers: int = 2,
         hidden_units: int = 32,
         time_column: str = "time",
+        device: str = "cpu",
     ):
-        super().__init__(data, time_column)
+        super().__init__(data, time_column, device)
         self._known_dynamics = known_dynamics
         self._init_params = init_params
         self._network = network
         self._hidden_layers = hidden_layers
         self._hidden_units = hidden_units
+        self._validate_known_dynamics()
+
+    def _validate_known_dynamics(self) -> None:
+        """Probe known_dynamics with a zero input to catch shape/signature errors early."""
+        u_test = torch.zeros(self._n_states, dtype=torch.float64)
+        p_test = {k: torch.tensor(float(v), dtype=torch.float64) for k, v in self._init_params.items()}
+        t_test = torch.tensor(0.0, dtype=torch.float64)
+        try:
+            result = self._known_dynamics(u_test, p_test, t_test)
+        except Exception as e:
+            raise ValueError(f"known_dynamics raised an error on test input: {e}") from e
+        if result.shape != (self._n_states,):
+            raise ValueError(
+                f"known_dynamics must return shape ({self._n_states},), got {result.shape}"
+            )
 
     def _build_ode_func(self) -> nn.Module:
         # Wrap mechanistic parameters as trainable nn.Parameters

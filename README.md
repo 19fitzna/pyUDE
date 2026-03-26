@@ -124,6 +124,38 @@ sol = odeint(rhs, y0=[1.0, 0.5], t=t_span)
 | `solver` | any torchdiffeq solver name | `"dopri5"` |
 | `epochs` | int | `500` |
 | `learning_rate` | float | `1e-3` |
+| `patience` | int or `None` | `None` (disabled) |
+| `max_grad_norm` | float | `10.0` |
+| `weight_decay` | float or `None` | `None` (auto: `1e-4` for derivative_matching, `0.0` for simulation) |
+
+`loss="simulation"` integrates the ODE forward and requires `torchdiffeq`.
+`loss="derivative_matching"` estimates derivatives via cubic spline interpolation (requires
+`scipy`; falls back to finite differences without it) and does **not** require `torchdiffeq`.
+It is faster per epoch but should be followed by simulation fine-tuning for best forecast
+accuracy.
+
+Repeated `train()` calls continue from existing weights (additive training). The optimizer
+resets each call, allowing you to change `learning_rate` between phases.
+
+## GPU Acceleration
+
+All PyTorch models accept a `device` parameter:
+
+```python
+model = ude.NODE(data, device="cuda")      # NVIDIA GPU
+model = ude.NODE(data, device="mps")       # Apple Silicon
+model = ude.NODE(data, device="cpu")       # CPU (default)
+```
+
+Auto-select the best available device:
+
+```python
+import torch
+device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+model = ude.NODE(data, device=device)
+```
+
+`forecast()` always returns a CPU `pd.DataFrame` regardless of the training device.
 
 ## Running Tests
 

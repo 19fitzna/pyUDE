@@ -82,20 +82,48 @@ used rather than direct automatic differentiation through the solver steps.
 
 ### Derivative-matching loss (PyTorch backend only)
 
-1. Estimate derivatives from the data using finite differences (central differences in the
-   interior, forward/backward at the edges).
-2. Evaluate the ODE right-hand side at each observed state.
+1. Estimate derivatives from the data using **cubic spline interpolation** (via
+   `scipy.interpolate.CubicSpline`). Falls back to central finite differences if scipy is not
+   installed.
+2. At each epoch, perturb the observed states with small Gaussian noise before evaluating the
+   ODE right-hand side. This encourages the network to generalise to nearby states, not just
+   the exact observed points — which prevents straight-line forecasts when integrating.
 3. Compute MSE between predicted and estimated derivatives — **no ODE integration required**.
-4. Update with Adam.
+4. Update with Adam + L2 weight decay (default `1e-4`; pass `weight_decay=0` to disable).
 
-This is faster per epoch but noisier on coarsely-sampled data. It is often useful for a quick
-first fit before switching to simulation loss.
+This is faster per epoch than simulation loss and does not require `torchdiffeq`. It is often
+useful for a quick first fit before switching to simulation loss. For best results, install
+scipy: `pip install scipy`.
 
 ### Discrete-time loss
 
 1. Apply the map `u[n+1] = g_known(u[n], p, n) + NN(u[n])` at each observed state.
 2. Compute one-step-ahead MSE against `u[n+1]`.
 3. Update with Adam.
+
+### Training safeguards
+
+All training loops include:
+
+- **Gradient clipping** (`max_grad_norm=10.0`): caps the gradient norm before each optimizer
+  step, preventing gradient explosions during long-horizon ODE integration.
+- **NaN detection**: if the loss becomes `NaN`, training stops immediately with a warning rather
+  than continuing to corrupt model weights.
+- **Early stopping** (`patience=N`): stops training if the loss does not improve for `N`
+  consecutive epochs and restores the best weights seen so far.
+
+### Additive training
+
+Calling `train()` more than once on the same model **continues training from the current
+weights** — the model is not re-initialised. This is useful for staged training strategies:
+
+```python
+model.train(epochs=200, learning_rate=1e-3)   # coarse pass
+model.train(epochs=500, learning_rate=1e-4)   # fine-tune
+```
+
+Each call creates a fresh optimizer, so `learning_rate` and `optimizer` can be changed freely
+between calls.
 
 ---
 
@@ -150,6 +178,27 @@ def f(u: list, p: dict, t: float) -> list:
 
 The Julia backend accepts plain Python lists/floats because the function crosses the
 Python↔Julia bridge via PythonCall.jl. PyTorch tensors cannot cross this boundary.
+
+---
+
+## GPU Acceleration
+
+PyTorch models support GPU training via the `device` constructor parameter:
+
+```python
+model = ude.NODE(data, device="cuda")   # NVIDIA GPU
+model = ude.NODE(data, device="mps")    # Apple Silicon (Metal Performance Shaders)
+model = ude.NODE(data, device="cpu")    # CPU (default)
+```
+
+When `device` is set, the neural network parameters and all training tensors (`t`, `u`) are
+moved to the device automatically. `forecast()` always returns a CPU `pd.DataFrame`.
+
+The adjoint ODE solver (`torchdiffeq.odeint_adjoint`) operates natively on GPU tensors, so
+the full forward integration and backward adjoint pass run on the accelerator.
+
+Julia backend models use Julia's GPU packages (CUDA.jl, Metal.jl) independently and are not
+affected by the `device` parameter.
 
 ---
 

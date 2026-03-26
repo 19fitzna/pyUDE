@@ -97,24 +97,25 @@ class JuliaCustomDerivatives:
         """
         jl, UDE = get_julia()
 
-        # Wrap Python known_dynamics as a Julia-callable function
-        jl_dynamics = jl.wrap_python_dynamics(self._known_dynamics)
+        if self._jl_model is None:
+            # Wrap Python known_dynamics as a Julia-callable function
+            jl_dynamics = jl.wrap_python_dynamics(self._known_dynamics)
 
-        # Build Lux MLP for unknown residual dynamics
-        nn = jl.make_lux_mlp(
-            self._n_states, self._n_states,
-            self._hidden_units, self._hidden_layers,
-        )
+            # Build Lux MLP for unknown residual dynamics
+            nn = jl.make_lux_mlp(
+                self._n_states, self._n_states,
+                self._hidden_units, self._hidden_layers,
+            )
 
-        # Convert training data and initial parameters
-        t_jl, data_jl, _ = df_to_julia(self._data, self._time_column)
-        init_params_jl = params_dict_to_julia(self._init_params, jl)
+            # Convert training data and initial parameters
+            t_jl, data_jl, _ = df_to_julia(self._data, self._time_column)
+            init_params_jl = params_dict_to_julia(self._init_params, jl)
 
-        # Construct UniversalDiffEq.CustomDerivatives Julia struct
-        self._jl_model = UDE.CustomDerivatives(
-            data_jl, t_jl, jl_dynamics, init_params_jl,
-            neural_network=nn,
-        )
+            # Construct UniversalDiffEq.CustomDerivatives Julia struct
+            self._jl_model = UDE.CustomDerivatives(
+                data_jl, t_jl, jl_dynamics, init_params_jl,
+                neural_network=nn,
+            )
 
         # Build optimizer and train
         jl_opt = jl.make_optimizer(optimizer, float(learning_rate))
@@ -171,13 +172,29 @@ class JuliaCustomDerivatives:
         """
         self._require_trained()
         jl, UDE = get_julia()
-        # UniversalDiffEq stores mechanistic params in model.parameters
-        jl_params = self._jl_model.parameters
-        return {str(k): float(v) for k, v in zip(jl_params._fields, jl_params)}
+        try:
+            jl_params = self._jl_model.parameters
+            return {str(k): float(v) for k, v in zip(jl_params._fields, jl_params)}
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to extract parameters from Julia model. "
+                "The UniversalDiffEq.jl parameter storage format may have changed. "
+                f"Original error: {e}"
+            ) from e
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        status = "trained" if self._is_trained else "untrained"
+        return (
+            f"{self.__class__.__name__}("
+            f"states={self._n_states}, "
+            f"columns={self._state_columns}, "
+            f"solver='{self._solver}', "
+            f"{status})"
+        )
 
     @property
     def data(self) -> pd.DataFrame:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Callable, List, Optional
 
@@ -21,6 +23,7 @@ class UDEModel(ABC):
         self,
         data: pd.DataFrame,
         time_column: str = "time",
+        device: str = "cpu",
     ):
         validate_dataframe(data, time_column)
         self._data = data
@@ -28,9 +31,11 @@ class UDEModel(ABC):
         self._state_columns: List[str] = [c for c in data.columns if c != time_column]
         self._n_states: int = len(self._state_columns)
         self._is_trained: bool = False
+        self._device: torch.device = torch.device(device)
 
         # Populated by train()
         self._ode_func: Optional[nn.Module] = None
+        self._solver: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -53,6 +58,9 @@ class UDEModel(ABC):
         log_interval: int = 50,
         verbose: bool = True,
         solver: str = "dopri5",
+        patience: Optional[int] = None,
+        max_grad_norm: float = 10.0,
+        weight_decay: Optional[float] = None,
         **kwargs,
     ) -> "UDEModel":
         """
@@ -63,7 +71,7 @@ class UDEModel(ABC):
         loss : {"simulation", "derivative_matching"}
             Loss function. ``"simulation"`` integrates the ODE forward and
             compares to observations; ``"derivative_matching"`` compares
-            predicted derivatives against finite-difference estimates.
+            predicted derivatives against cubic-spline estimates.
         optimizer : str
             Optimizer name (``"adam"`` or ``"sgd"``).
         learning_rate : float
@@ -73,6 +81,13 @@ class UDEModel(ABC):
         verbose : bool
         solver : str
             ODE solver passed to torchdiffeq (e.g. ``"dopri5"``, ``"rk4"``).
+        patience : int, optional
+            Stop if loss does not improve for this many epochs (early stopping).
+        max_grad_norm : float
+            Maximum norm for gradient clipping. Set to 0 to disable.
+        weight_decay : float, optional
+            L2 regularisation. Defaults to ``1e-4`` for derivative_matching
+            and ``0.0`` for simulation.
 
         Returns
         -------
@@ -80,8 +95,14 @@ class UDEModel(ABC):
         """
         from pyUDE.training.trainer import train_model
 
+        if weight_decay is None:
+            weight_decay = 1e-4 if loss == "derivative_matching" else 0.0
+
         if self._ode_func is None:
             self._ode_func = self._build_ode_func()
+
+        self._ode_func = self._ode_func.to(self._device)
+        self._solver = solver
 
         train_model(
             model=self,
@@ -92,6 +113,9 @@ class UDEModel(ABC):
             log_interval=log_interval,
             verbose=verbose,
             solver=solver,
+            patience=patience,
+            max_grad_norm=max_grad_norm,
+            weight_decay=weight_decay,
             **kwargs,
         )
         self._is_trained = True
@@ -141,6 +165,28 @@ class UDEModel(ABC):
         return _get_rhs(self)
 
     # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """
+        Save the trained model to disk.
+
+        Parameters
+        ----------
+        path : str
+            File path (e.g. ``"model.pt"``).
+        """
+        self._require_trained()
+        torch.save({
+            'ode_func_state': self._ode_func.state_dict(),
+            'data': self._data,
+            'time_column': self._time_column,
+            'solver': self._solver,
+            'class': self.__class__.__name__,
+        }, path)
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -149,6 +195,16 @@ class UDEModel(ABC):
             raise RuntimeError(
                 "Model has not been trained yet. Call model.train() first."
             )
+
+    def __repr__(self) -> str:
+        status = "trained" if self._is_trained else "untrained"
+        return (
+            f"{self.__class__.__name__}("
+            f"states={self._n_states}, "
+            f"columns={self._state_columns}, "
+            f"device='{self._device}', "
+            f"{status})"
+        )
 
     @property
     def data(self) -> pd.DataFrame:

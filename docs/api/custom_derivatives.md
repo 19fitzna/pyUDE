@@ -27,18 +27,20 @@ CustomDerivatives(
     hidden_layers: int = 2,
     hidden_units: int = 32,
     time_column: str = "time",
+    device: str = "cpu",
 )
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `data` | `pd.DataFrame` | — | Time series data. |
-| `known_dynamics` | `Callable` | — | `f(u, p, t) -> du`. See [signature details](#known_dynamics-signature-pytorch) below. |
+| `known_dynamics` | `Callable` | — | `f(u, p, t) -> du`. See [signature details](#known_dynamics-signature-pytorch) below. Validated at construction time — an error is raised immediately if the function returns the wrong shape or raises an exception. |
 | `init_params` | `dict` | — | Initial values for the mechanistic parameters. Keys are parameter names (strings); values are floats or tensors. All parameters are made trainable. |
 | `network` | `nn.Module \| None` | `None` | Neural network for the unknown residual. Defaults to a small MLP. |
 | `hidden_layers` | `int` | `2` | Hidden layers in the default MLP. |
 | `hidden_units` | `int` | `32` | Units per hidden layer. |
 | `time_column` | `str` | `"time"` | Name of the time column. |
+| `device` | `str` | `"cpu"` | PyTorch device: `"cpu"`, `"cuda"`, `"cuda:0"`, `"mps"`. |
 
 ### `known_dynamics` Signature (PyTorch)
 
@@ -84,10 +86,15 @@ model.train(
     log_interval: int = 50,
     verbose: bool = True,
     solver: str = "dopri5",
+    patience: int | None = None,
+    max_grad_norm: float = 10.0,
+    weight_decay: float | None = None,
 ) -> CustomDerivatives
 ```
 
-Same parameters as `NODE.train()`. See [NODE API](node.md#train).
+Same parameters as `NODE.train()`. See [NODE API](node.md#train) for full descriptions.
+Calling `train()` a second time continues from the current weights — mechanistic parameters
+and network weights are preserved.
 
 #### `forecast`
 
