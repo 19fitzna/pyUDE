@@ -19,18 +19,9 @@ def _deprecated(name: str):
     )
 
 
-from pyUDE.core.node import NODE as _NODE
+from pyUDE.core.node import NODE as _NODE  # noqa: F401 — kept for __getattr__ map
 from pyUDE.core.custom_derivatives import CustomDerivatives as _CustomDerivatives
 from pyUDE.core.custom_differences import CustomDifferences as _CustomDifferences
-
-
-class NODE(_NODE):
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-
-    def __class_getitem__(cls, item):
-        _deprecated("NODE")
-        return _NODE
 
 
 def __getattr__(name: str):

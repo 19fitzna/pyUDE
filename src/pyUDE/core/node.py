@@ -7,11 +7,21 @@ import torch.nn as nn
 from pyUDE.core.base import UDEModel
 
 
-def _default_mlp(in_dim: int, out_dim: int, hidden_layers: int, hidden_units: int) -> nn.Sequential:
-    """Build a simple MLP with tanh activations."""
+def _default_mlp(
+    in_dim: int,
+    out_dim: int,
+    hidden_layers: int,
+    hidden_units: int,
+    dropout: float = 0.0,
+) -> nn.Sequential:
+    """Build a simple MLP with tanh activations and optional dropout."""
     layers = [nn.Linear(in_dim, hidden_units), nn.Tanh()]
+    if dropout > 0:
+        layers.append(nn.Dropout(p=dropout))
     for _ in range(hidden_layers - 1):
         layers += [nn.Linear(hidden_units, hidden_units), nn.Tanh()]
+        if dropout > 0:
+            layers.append(nn.Dropout(p=dropout))
     layers.append(nn.Linear(hidden_units, out_dim))
     return nn.Sequential(*layers)
 
@@ -64,11 +74,15 @@ class NODE(UDEModel):
         hidden_units: int = 32,
         time_column: str = "time",
         device: str = "cpu",
+        dropout: float = 0.0,
     ):
+        if not (0.0 <= dropout < 1.0):
+            raise ValueError(f"dropout must be in [0, 1), got {dropout!r}.")
         super().__init__(data, time_column, device)
         self._network = network
         self._hidden_layers = hidden_layers
         self._hidden_units = hidden_units
+        self._dropout = dropout
 
     def _build_ode_func(self) -> nn.Module:
         if self._network is not None:
@@ -79,5 +93,6 @@ class NODE(UDEModel):
                 out_dim=self._n_states,
                 hidden_layers=self._hidden_layers,
                 hidden_units=self._hidden_units,
+                dropout=self._dropout,
             ).double()  # match float64 data tensors
         return _NODEFunc(net)

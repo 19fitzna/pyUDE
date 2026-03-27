@@ -45,7 +45,10 @@ def forecast(
             "Install it with: pip install torchdiffeq"
         ) from e
 
-    t_train, u_train, _ = model._get_training_tensors()
+    if steps < 1:
+        raise ValueError(f"steps must be a positive integer, got {steps!r}.")
+
+    t_train, u_train = model._get_training_tensors()
 
     if dt is None:
         dt = float(torch.median(t_train[1:] - t_train[:-1]).item())
@@ -60,13 +63,17 @@ def forecast(
     # Move to the device the model was trained on
     device = getattr(model, '_device', torch.device('cpu'))
     t_forecast = t_forecast.to(device)
-    u0 = u0.to(device)
+    u0 = u0.to(device=device, dtype=torch.float64)
 
     # Use the solver that was used during training for consistency
     solver = getattr(model, '_solver', None) or 'dopri5'
 
+    was_training = model._ode_func.training
+    model._ode_func.eval()
     with torch.no_grad():
         u_pred = odeint(model._ode_func, u0, t_forecast, method=solver)
+    if was_training:
+        model._ode_func.train()
 
     # Drop the first point (= last training observation); move to CPU for numpy
     t_out = t_forecast[1:].cpu()
@@ -98,23 +105,30 @@ def forecast_differences(
     -------
     pd.DataFrame
     """
-    t_train, u_train, _ = model._get_training_tensors()
+    if steps < 1:
+        raise ValueError(f"steps must be a positive integer, got {steps!r}.")
+
+    t_train, u_train = model._get_training_tensors()
     dt = float(torch.median(t_train[1:] - t_train[:-1]).item())
     t_last = float(t_train[-1].item())
 
     device = getattr(model, '_device', torch.device('cpu'))
     u = u_train[-1] if initial_state is None else initial_state
-    u = u.to(device)
+    u = u.to(device=device, dtype=torch.float64)
     p = {k: v for k, v in model._param_dict.items()}
 
     # Pre-compute all forecast times in one tensor
     t_forecast = torch.arange(1, steps + 1, dtype=torch.float64, device=device) * dt + t_last
 
+    was_training = model._network_module.training
+    model._network_module.eval()
     states = []
     with torch.no_grad():
         for i in range(steps):
             u = model._known_map(u, p, t_forecast[i]) + model._network_module(u)
             states.append(u)
+    if was_training:
+        model._network_module.train()
 
     u_stack = torch.stack(states).cpu().numpy()
     t_out = t_forecast.cpu().numpy()

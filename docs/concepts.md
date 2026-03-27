@@ -202,6 +202,71 @@ affected by the `device` parameter.
 
 ---
 
+## Training Performance (PyTorch Backend)
+
+### Why simulation loss is slow
+
+Simulation loss requires integrating the full ODE trajectory forward at every epoch, then running
+the adjoint ODE backward to compute gradients. For a dataset with `T` time points and an adaptive
+solver like `dopri5`, each epoch makes roughly `T × 8` calls to the ODE right-hand side — both
+forward and backward — before each gradient step. This is unavoidable: accurate gradient
+propagation through an ODE requires accurate integration.
+
+`CustomDerivatives` is slightly slower than `NODE` for the same reason: each ODE evaluation
+calls both the user-supplied `known_dynamics` function **and** the neural network.
+
+Derivative-matching loss, by contrast, only evaluates the ODE function once per observed time
+point, making it roughly 8× cheaper per epoch than simulation.
+
+### Recommended strategies for faster training
+
+**1. Use the warm-up workflow**
+
+Start with derivative matching (cheap), then fine-tune with simulation (accurate):
+
+```python
+# Fast: no ODE integration, ~120 function calls/epoch
+model.train(loss="derivative_matching", epochs=800, learning_rate=1e-3)
+
+# Accurate: full ODE integration, ~960 function calls/epoch
+model.train(loss="simulation", epochs=1000, learning_rate=1e-4, patience=100)
+```
+
+**2. Loosen tolerances during warm-up**
+
+The `dopri5` adaptive solver uses `rtol=1e-3, atol=1e-6` by default. During early training the
+model is far from the target anyway — tight integration accuracy provides no benefit. Relaxing
+tolerances cuts solver steps by 2–5×:
+
+```python
+# Stage 1: fast but rough (loose tolerances)
+model.train(loss="simulation", epochs=500, solver="dopri5",
+            rtol=1e-2, atol=1e-4)
+
+# Stage 2: accurate final polish (default tolerances)
+model.train(loss="simulation", epochs=500, solver="dopri5",
+            rtol=1e-4, atol=1e-6)
+```
+
+**3. Use a fixed-step solver for warm-up**
+
+`solver="rk4"` uses exactly 4 evaluations per interval regardless of system behaviour. It avoids
+the step-size adaptation overhead entirely and is predictable. Use it for initial training stages
+where high accuracy is not needed:
+
+```python
+model.train(loss="simulation", epochs=500, solver="rk4")         # fixed 4 evals/interval
+model.train(loss="simulation", epochs=500, solver="dopri5")      # adaptive, accurate
+```
+
+**4. Reduce training data density**
+
+The solver integrates over every interval between consecutive time points. Subsampling the
+training data (every other row, or a coarser time grid) reduces integration cost proportionally.
+The model can still be forecast on a dense grid after training.
+
+---
+
 ## Further Reading
 
 - [Rackauckas et al. (2020) — Universal Differential Equations for Scientific Machine Learning](https://arxiv.org/abs/2001.04385)
