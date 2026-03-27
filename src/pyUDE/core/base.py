@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Union
 
 import pandas as pd
 import torch
@@ -61,6 +61,8 @@ class UDEModel(ABC):
         patience: Optional[int] = None,
         max_grad_norm: float = 10.0,
         weight_decay: Optional[float] = None,
+        scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+        progress_bar: bool = False,
         **kwargs,
     ) -> "UDEModel":
         """
@@ -88,6 +90,11 @@ class UDEModel(ABC):
         weight_decay : float, optional
             L2 regularisation. Defaults to ``1e-4`` for derivative_matching
             and ``0.0`` for simulation.
+        scheduler : str or LRScheduler, optional
+            Learning rate scheduler. ``"cosine"`` or ``"plateau"`` for
+            built-in schedules, or pass a pre-built scheduler instance.
+        progress_bar : bool
+            Show a tqdm progress bar instead of print-based logging.
 
         Returns
         -------
@@ -104,7 +111,7 @@ class UDEModel(ABC):
         self._ode_func = self._ode_func.to(self._device)
         self._solver = solver
 
-        train_model(
+        self.train_result_ = train_model(
             model=self,
             loss=loss,
             optimizer_name=optimizer,
@@ -116,6 +123,8 @@ class UDEModel(ABC):
             patience=patience,
             max_grad_norm=max_grad_norm,
             weight_decay=weight_decay,
+            scheduler=scheduler,
+            progress_bar=progress_bar,
             **kwargs,
         )
         self._is_trained = True

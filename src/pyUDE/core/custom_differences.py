@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Union
 
 import pandas as pd
 import torch
@@ -86,6 +86,8 @@ class CustomDifferences(UDEModel):
         verbose: bool = True,
         patience: Optional[int] = None,
         max_grad_norm: float = 10.0,
+        scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+        progress_bar: bool = False,
         **kwargs,
     ) -> "CustomDifferences":
         """Train by minimising one-step-ahead MSE across the time series."""
@@ -108,7 +110,7 @@ class CustomDifferences(UDEModel):
             else:
                 self._network_module = self._network.to(self._device)
 
-        train_differences(
+        self.train_result_ = train_differences(
             model=self,
             optimizer_name=optimizer,
             learning_rate=learning_rate,
@@ -117,6 +119,8 @@ class CustomDifferences(UDEModel):
             verbose=verbose,
             patience=patience,
             max_grad_norm=max_grad_norm,
+            scheduler=scheduler,
+            progress_bar=progress_bar,
         )
         self._is_trained = True
         return self

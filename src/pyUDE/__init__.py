@@ -8,6 +8,7 @@ from pyUDE.core.custom_derivatives import CustomDerivatives
 from pyUDE.core.custom_differences import CustomDifferences
 from pyUDE.analysis.forecast import forecast
 from pyUDE.analysis.dynamics import get_right_hand_side
+from pyUDE.training.trainer import TrainResult
 
 __all__ = [
     "NODE",
@@ -15,6 +16,7 @@ __all__ = [
     "CustomDifferences",
     "forecast",
     "get_right_hand_side",
+    "TrainResult",
 ]
 
 # Julia backend — only available when juliacall is installed

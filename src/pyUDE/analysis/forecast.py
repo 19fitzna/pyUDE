@@ -107,15 +107,18 @@ def forecast_differences(
     u = u.to(device)
     p = {k: v for k, v in model._param_dict.items()}
 
-    states = []
-    times = []
-    with torch.no_grad():
-        for i in range(1, steps + 1):
-            t_next = torch.tensor(t_last + dt * i, dtype=torch.float64, device=device)
-            u = model._known_map(u, p, t_next) + model._network_module(u)
-            states.append(u.cpu().numpy())
-            times.append(float(t_next.item()))
+    # Pre-compute all forecast times in one tensor
+    t_forecast = torch.arange(1, steps + 1, dtype=torch.float64, device=device) * dt + t_last
 
-    df = pd.DataFrame(np.stack(states), columns=model.state_columns)
-    df.insert(0, model.time_column, times)
+    states = []
+    with torch.no_grad():
+        for i in range(steps):
+            u = model._known_map(u, p, t_forecast[i]) + model._network_module(u)
+            states.append(u)
+
+    u_stack = torch.stack(states).cpu().numpy()
+    t_out = t_forecast.cpu().numpy()
+
+    df = pd.DataFrame(u_stack, columns=model.state_columns)
+    df.insert(0, model.time_column, t_out)
     return df
