@@ -1,5 +1,8 @@
 """Universal Differential Equations in Python."""
 
+import os as _os
+_os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 __version__ = "0.0.2"
 __description__ = "Universal Differential Equations in Python"
 
