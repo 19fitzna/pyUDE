@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
 import torch
@@ -67,6 +67,8 @@ class UDEModel(ABC):
         val_data: Optional[pd.DataFrame] = None,
         val_interval: int = 1,
         lambda_l1: float = 0.0,
+        scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+        progress_bar: bool = False,
         **kwargs,
     ) -> "UDEModel":
         """
@@ -117,6 +119,11 @@ class UDEModel(ABC):
             L1 penalty coefficient applied to all network weights. Default
             ``0.0`` (disabled). Can be combined with ``weight_decay`` (L2)
             for Elastic Net regularisation.
+        scheduler : str or LRScheduler, optional
+            Learning rate scheduler. ``"cosine"`` or ``"plateau"`` for
+            built-in schedules, or pass a pre-built scheduler instance.
+        progress_bar : bool
+            Show a tqdm progress bar instead of print-based logging.
 
         Returns
         -------
@@ -138,7 +145,7 @@ class UDEModel(ABC):
         self._ode_func = self._ode_func.to(self._device)
         self._solver = solver
 
-        history = train_model(
+        self.train_result_ = train_model(
             model=self,
             loss=loss,
             optimizer_name=optimizer,
@@ -157,10 +164,12 @@ class UDEModel(ABC):
             val_u=val_u,
             val_interval=val_interval,
             lambda_l1=lambda_l1,
+            scheduler=scheduler,
+            progress_bar=progress_bar,
             **kwargs,
         )
         self._is_trained = True
-        self._merge_history(history)
+        self._merge_history(self.train_result_.to_dict())
         return self
 
     def _merge_history(self, history: Dict[str, list]) -> None:

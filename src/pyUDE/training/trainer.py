@@ -1,6 +1,7 @@
 """Training routines for UDE models."""
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -10,6 +11,50 @@ if TYPE_CHECKING:
     from pyUDE.core.base import UDEModel
     from pyUDE.core.custom_differences import CustomDifferences
 
+
+@dataclass
+class TrainResult:
+    """Metadata returned after a training run.
+
+    Attributes
+    ----------
+    loss_history : list[float]
+        Training loss recorded at the end of each epoch.
+    val_loss_history : list[float]
+        Validation loss (empty when no validation data is provided).
+    val_epochs : list[int]
+        Epochs at which validation loss was recorded.
+    best_loss : float
+        Lowest monitored loss observed during training.
+    best_epoch : int
+        Epoch (1-indexed) at which ``best_loss`` was recorded.
+    epochs_run : int
+        Total number of epochs executed (may be less than requested if
+        early stopping triggered or NaN was detected).
+    stopped_early : bool
+        ``True`` if training ended due to the early-stopping criterion.
+    """
+
+    loss_history: List[float] = field(default_factory=list)
+    val_loss_history: List[float] = field(default_factory=list)
+    val_epochs: List[int] = field(default_factory=list)
+    best_loss: float = float("inf")
+    best_epoch: int = 0
+    epochs_run: int = 0
+    stopped_early: bool = False
+
+    def to_dict(self) -> Dict[str, list]:
+        """Convert to the dict format used by ``_merge_history``."""
+        return {
+            "train_loss": list(self.loss_history),
+            "val_loss": list(self.val_loss_history),
+            "val_epochs": list(self.val_epochs),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _make_optimizer(params, name: str, lr: float, weight_decay: float = 0.0) -> torch.optim.Optimizer:
     name = name.lower()
@@ -31,6 +76,75 @@ def _clamp_params(param_dict: nn.ParameterDict, param_bounds: dict) -> None:
                 p.clamp_(min=lo)
             elif hi is not None:
                 p.clamp_(max=hi)
+
+
+def _make_scheduler(optimizer, scheduler, epochs):
+    """Build an LR scheduler from a string shorthand or return a user-supplied instance.
+
+    Parameters
+    ----------
+    optimizer : torch.optim.Optimizer
+    scheduler : str, torch.optim.lr_scheduler.LRScheduler, or None
+    epochs : int
+    """
+    if scheduler is None:
+        return None
+    if isinstance(scheduler, torch.optim.lr_scheduler.LRScheduler):
+        return scheduler
+    if not isinstance(scheduler, str):
+        raise TypeError(f"scheduler must be a string or LRScheduler instance, got {type(scheduler)}")
+    name = scheduler.lower()
+    if name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    if name == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+    raise ValueError(f"Unknown scheduler '{name}'. Choose 'cosine', 'plateau', or pass an LRScheduler.")
+
+
+def _step_scheduler(scheduler, loss_val):
+    """Step the scheduler, handling ReduceLROnPlateau specially."""
+    if scheduler is None:
+        return
+    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        scheduler.step(loss_val)
+    else:
+        scheduler.step()
+
+
+def _epoch_iter(epochs, progress_bar, desc="Training"):
+    """Return an iterable over epoch numbers, optionally wrapped with tqdm."""
+    rng = range(1, epochs + 1)
+    if not progress_bar:
+        return rng
+    try:
+        from tqdm.auto import tqdm
+        return tqdm(rng, desc=desc, unit="epoch")
+    except ImportError:
+        import warnings
+        warnings.warn(
+            "tqdm not installed; falling back to print logging. "
+            "Install with: pip install tqdm",
+            stacklevel=3,
+        )
+        return rng
+
+
+def _batched_ode_call(ode_func, t_batch, u_batch):
+    """Evaluate ode_func over a batch of (t, u) pairs, using vmap when possible."""
+    try:
+        from torch.func import vmap
+        # Use functional_call through vmap for stateful modules
+        params = dict(ode_func.named_parameters())
+        buffers = dict(ode_func.named_buffers())
+
+        def fn(t_i, u_i):
+            return torch.func.functional_call(ode_func, (params, buffers), (t_i, u_i))
+
+        return vmap(fn, in_dims=(0, 0))(t_batch, u_batch)
+    except Exception:
+        # Fallback: user-supplied known_dynamics may use operations
+        # that vmap doesn't support (e.g., data-dependent control flow).
+        return torch.stack([ode_func(t_batch[i], u_batch[i]) for i in range(len(t_batch))])
 
 
 # ---------------------------------------------------------------------------
@@ -56,14 +170,15 @@ def train_model(
     val_u: Optional[torch.Tensor] = None,
     val_interval: int = 1,
     lambda_l1: float = 0.0,
+    scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+    progress_bar: bool = False,
     **kwargs,
-) -> Dict[str, list]:
+) -> TrainResult:
     """Train a continuous-time UDE model (NODE or CustomDerivatives).
 
     Returns
     -------
-    dict with keys ``"train_loss"``, ``"val_loss"`` (empty if no val data),
-    and ``"val_epochs"`` (empty if no val data).
+    TrainResult with loss history, validation loss, best epoch, etc.
     """
     ode_func = model._ode_func
     t, u_obs = model._get_training_tensors()
@@ -81,6 +196,7 @@ def train_model(
     optimizer = _make_optimizer(ode_func.parameters(), optimizer_name, learning_rate,
                                 weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
+    sched = _make_scheduler(optimizer, scheduler, epochs)
 
     if loss == "simulation":
         try:
@@ -93,6 +209,7 @@ def train_model(
         return _train_simulation(
             ode_func, t, u_obs, optimizer, loss_fn, odeint,
             solver, epochs, log_interval, verbose, patience, max_grad_norm,
+            sched, progress_bar,
             rtol=rtol, atol=atol,
             val_t=val_t, val_u=val_u, val_interval=val_interval,
             lambda_l1=lambda_l1, param_bounds=param_bounds,
@@ -101,6 +218,7 @@ def train_model(
         return _train_derivative_matching(
             ode_func, t, u_obs, optimizer, loss_fn,
             epochs, log_interval, verbose, patience, max_grad_norm,
+            sched, progress_bar,
             noise_scale=noise_scale,
             val_t=val_t, val_u=val_u, val_interval=val_interval,
             lambda_l1=lambda_l1, param_bounds=param_bounds,
@@ -112,10 +230,11 @@ def train_model(
 def _train_simulation(
     ode_func, t, u_obs, optimizer, loss_fn, odeint,
     solver, epochs, log_interval, verbose, patience, max_grad_norm,
+    scheduler, progress_bar,
     rtol=1e-3, atol=1e-6,
     val_t=None, val_u=None, val_interval=1,
     lambda_l1=0.0, param_bounds=None,
-) -> Dict[str, list]:
+) -> TrainResult:
     """Integrate ODE forward and compare to observations."""
     n_params = sum(1 for _ in ode_func.parameters())
     assert n_params > 0, "No trainable parameters found in ODE function"
@@ -124,12 +243,11 @@ def _train_simulation(
     best_loss = float('inf')
     best_state = None
     epochs_no_improve = 0
+    result = TrainResult()
 
-    train_loss_history: List[float] = []
-    val_loss_history: List[float] = []
-    val_epochs_history: List[int] = []
+    epoch_range = _epoch_iter(epochs, progress_bar, desc="Simulation")
 
-    for epoch in range(1, epochs + 1):
+    for epoch in epoch_range:
         optimizer.zero_grad()
         u_pred = odeint(ode_func, u0, t, method=solver,
                         rtol=rtol, atol=atol,
@@ -141,7 +259,7 @@ def _train_simulation(
             loss = loss + lambda_l1 * l1_penalty
 
         if torch.isnan(loss):
-            if verbose:
+            if verbose and not progress_bar:
                 print(f"NaN loss detected at epoch {epoch}. Stopping training.")
             break
 
@@ -151,12 +269,13 @@ def _train_simulation(
             torch.nn.utils.clip_grad_norm_(ode_func.parameters(), max_norm=max_grad_norm)
 
         optimizer.step()
+        _step_scheduler(scheduler, loss.item())
 
         if param_bounds and hasattr(ode_func, 'params'):
             _clamp_params(ode_func.params, param_bounds)
 
         loss_val = loss.item()
-        train_loss_history.append(loss_val)
+        result.loss_history.append(loss_val)
 
         # Validation loss
         val_loss_val = None
@@ -167,8 +286,8 @@ def _train_simulation(
                                     rtol=rtol, atol=atol)
                 u_val_pred = u_extended[1:]
                 val_loss_val = loss_fn(u_val_pred, val_u).item()
-            val_loss_history.append(val_loss_val)
-            val_epochs_history.append(epoch)
+            result.val_loss_history.append(val_loss_val)
+            result.val_epochs.append(epoch)
 
         # Early stopping: use val loss if available this epoch, else train loss
         monitor = val_loss_val if val_t is not None else loss_val
@@ -176,6 +295,8 @@ def _train_simulation(
             if monitor < best_loss:
                 best_loss = monitor
                 best_state = {k: v.clone() for k, v in ode_func.state_dict().items()}
+                result.best_loss = best_loss
+                result.best_epoch = epoch
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
@@ -183,22 +304,29 @@ def _train_simulation(
             if epochs_no_improve >= patience:
                 if best_state is not None:
                     ode_func.load_state_dict(best_state)
-                if verbose:
+                result.stopped_early = True
+                if verbose and not progress_bar:
                     label = "val" if val_t is not None else "train"
                     print(f"Early stopping at epoch {epoch}. Best {label} loss: {best_loss:.6f}")
                 break
+        elif not patience:
+            # Track best even without early stopping
+            if loss_val < best_loss:
+                best_loss = loss_val
+                result.best_loss = best_loss
+                result.best_epoch = epoch
 
-        if verbose and epoch % log_interval == 0:
+        if verbose and not progress_bar and epoch % log_interval == 0:
             msg = f"Epoch {epoch:>5d}/{epochs}  loss={loss_val:.6f}"
             if val_loss_val is not None:
                 msg += f"  val_loss={val_loss_val:.6f}"
             print(msg)
 
-    return {
-        "train_loss": train_loss_history,
-        "val_loss": val_loss_history,
-        "val_epochs": val_epochs_history,
-    }
+        if hasattr(epoch_range, 'set_postfix'):
+            epoch_range.set_postfix(loss=f"{loss_val:.6f}")
+
+    result.epochs_run = len(result.loss_history)
+    return result
 
 
 def _estimate_derivatives(t, u_obs):
@@ -229,10 +357,11 @@ def _estimate_derivatives(t, u_obs):
 def _train_derivative_matching(
     ode_func, t, u_obs, optimizer, loss_fn,
     epochs, log_interval, verbose, patience, max_grad_norm,
+    scheduler, progress_bar,
     noise_scale=0.01,
     val_t=None, val_u=None, val_interval=1,
     lambda_l1=0.0, param_bounds=None,
-) -> Dict[str, list]:
+) -> TrainResult:
     """Compare predicted derivatives against cubic-spline estimates.
 
     Injects Gaussian noise into training states to encourage generalisation
@@ -247,23 +376,17 @@ def _train_derivative_matching(
     best_loss = float('inf')
     best_state = None
     epochs_no_improve = 0
+    result = TrainResult()
 
-    train_loss_history: List[float] = []
-    val_loss_history: List[float] = []
-    val_epochs_history: List[int] = []
+    epoch_range = _epoch_iter(epochs, progress_bar, desc="Deriv. matching")
 
-    for epoch in range(1, epochs + 1):
+    for epoch in epoch_range:
         optimizer.zero_grad()
 
         # Perturb observed states so the network generalizes beyond exact data points
         u_input = u_obs + noise_scale * torch.randn_like(u_obs)
 
-        try:
-            # Vectorised forward pass — ~T× faster than the Python loop below
-            du_pred = torch.vmap(ode_func)(t, u_input)
-        except Exception:
-            # Fallback: known_dynamics uses control flow not supported by vmap
-            du_pred = torch.stack([ode_func(t[i], u_input[i]) for i in range(len(t))])
+        du_pred = _batched_ode_call(ode_func, t, u_input)
         loss = loss_fn(du_pred, du_target)
 
         if lambda_l1 > 0:
@@ -271,7 +394,7 @@ def _train_derivative_matching(
             loss = loss + lambda_l1 * l1_penalty
 
         if torch.isnan(loss):
-            if verbose:
+            if verbose and not progress_bar:
                 print(f"NaN loss detected at epoch {epoch}. Stopping training.")
             break
 
@@ -281,26 +404,24 @@ def _train_derivative_matching(
             torch.nn.utils.clip_grad_norm_(ode_func.parameters(), max_norm=max_grad_norm)
 
         optimizer.step()
+        _step_scheduler(scheduler, loss.item())
 
         if param_bounds and hasattr(ode_func, 'params'):
             _clamp_params(ode_func.params, param_bounds)
 
         loss_val = loss.item()
-        train_loss_history.append(loss_val)
+        result.loss_history.append(loss_val)
 
         # Validation loss
         val_loss_val = None
         if val_t is not None and epoch % val_interval == 0:
             ode_func.eval()
             with torch.no_grad():
-                try:
-                    du_val_pred = torch.vmap(ode_func)(val_t, val_u)
-                except Exception:
-                    du_val_pred = torch.stack([ode_func(val_t[i], val_u[i]) for i in range(len(val_t))])
+                du_val_pred = _batched_ode_call(ode_func, val_t, val_u)
                 val_loss_val = loss_fn(du_val_pred, val_du_target).item()
             ode_func.train()
-            val_loss_history.append(val_loss_val)
-            val_epochs_history.append(epoch)
+            result.val_loss_history.append(val_loss_val)
+            result.val_epochs.append(epoch)
 
         # Early stopping
         monitor = val_loss_val if val_t is not None else loss_val
@@ -308,6 +429,8 @@ def _train_derivative_matching(
             if monitor < best_loss:
                 best_loss = monitor
                 best_state = {k: v.clone() for k, v in ode_func.state_dict().items()}
+                result.best_loss = best_loss
+                result.best_epoch = epoch
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
@@ -315,22 +438,28 @@ def _train_derivative_matching(
             if epochs_no_improve >= patience:
                 if best_state is not None:
                     ode_func.load_state_dict(best_state)
-                if verbose:
+                result.stopped_early = True
+                if verbose and not progress_bar:
                     label = "val" if val_t is not None else "train"
                     print(f"Early stopping at epoch {epoch}. Best {label} loss: {best_loss:.6f}")
                 break
+        elif not patience:
+            if loss_val < best_loss:
+                best_loss = loss_val
+                result.best_loss = best_loss
+                result.best_epoch = epoch
 
-        if verbose and epoch % log_interval == 0:
+        if verbose and not progress_bar and epoch % log_interval == 0:
             msg = f"Epoch {epoch:>5d}/{epochs}  loss={loss_val:.6f}"
             if val_loss_val is not None:
                 msg += f"  val_loss={val_loss_val:.6f}"
             print(msg)
 
-    return {
-        "train_loss": train_loss_history,
-        "val_loss": val_loss_history,
-        "val_epochs": val_epochs_history,
-    }
+        if hasattr(epoch_range, 'set_postfix'):
+            epoch_range.set_postfix(loss=f"{loss_val:.6f}")
+
+    result.epochs_run = len(result.loss_history)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -351,12 +480,14 @@ def train_differences(
     val_u: Optional[torch.Tensor] = None,
     val_interval: int = 1,
     lambda_l1: float = 0.0,
-) -> Dict[str, list]:
+    scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+    progress_bar: bool = False,
+) -> TrainResult:
     """Train a discrete-time UDE model by minimising one-step-ahead MSE.
 
     Returns
     -------
-    dict with keys ``"train_loss"``, ``"val_loss"``, ``"val_epochs"``.
+    TrainResult with loss history, validation loss, best epoch, etc.
     """
     t, u_obs = model._get_training_tensors()
     device = model._device
@@ -375,31 +506,50 @@ def train_differences(
     all_params = list(param_dict.parameters()) + list(network.parameters())
     optimizer = _make_optimizer(all_params, optimizer_name, learning_rate, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
+    sched = _make_scheduler(optimizer, scheduler, epochs)
 
     best_loss = float('inf')
     best_param_state = None
     best_net_state = None
     epochs_no_improve = 0
+    result = TrainResult()
 
-    train_loss_history: List[float] = []
-    val_loss_history: List[float] = []
-    val_epochs_history: List[int] = []
+    # Pre-slice inputs for the one-step-ahead prediction
+    u_in = u_obs[:-1]
+    t_in = t[:-1]
+    u_target = u_obs[1:]
 
-    for epoch in range(1, epochs + 1):
+    epoch_range = _epoch_iter(epochs, progress_bar, desc="Discrete")
+
+    for epoch in epoch_range:
         optimizer.zero_grad()
         p = {k: v for k, v in param_dict.items()}
-        u_next_pred = torch.stack([
-            known_map(u_obs[i], p, t[i]) + network(u_obs[i])
-            for i in range(len(t) - 1)
-        ])
-        loss = loss_fn(u_next_pred, u_obs[1:])
+
+        # Try vectorised forward pass; fall back to loop if vmap can't trace
+        try:
+            from torch.func import vmap
+            params = dict(network.named_parameters())
+            buffers = dict(network.named_buffers())
+
+            def step_fn(u_i, t_i):
+                net_out = torch.func.functional_call(network, (params, buffers), (u_i,))
+                return known_map(u_i, p, t_i) + net_out
+
+            u_next_pred = vmap(step_fn, in_dims=(0, 0))(u_in, t_in)
+        except Exception:
+            u_next_pred = torch.stack([
+                known_map(u_in[i], p, t_in[i]) + network(u_in[i])
+                for i in range(len(u_in))
+            ])
+
+        loss = loss_fn(u_next_pred, u_target)
 
         if lambda_l1 > 0:
             l1_penalty = sum(p_.abs().sum() for p_ in all_params)
             loss = loss + lambda_l1 * l1_penalty
 
         if torch.isnan(loss):
-            if verbose:
+            if verbose and not progress_bar:
                 print(f"NaN loss detected at epoch {epoch}. Stopping training.")
             break
 
@@ -409,12 +559,13 @@ def train_differences(
             torch.nn.utils.clip_grad_norm_(all_params, max_norm=max_grad_norm)
 
         optimizer.step()
+        _step_scheduler(sched, loss.item())
 
         if param_bounds:
             _clamp_params(param_dict, param_bounds)
 
         loss_val = loss.item()
-        train_loss_history.append(loss_val)
+        result.loss_history.append(loss_val)
 
         # Validation loss
         val_loss_val = None
@@ -429,8 +580,8 @@ def train_differences(
                     u_cur = u_next
                 u_val_pred = torch.stack(preds)
                 val_loss_val = loss_fn(u_val_pred, val_u).item()
-            val_loss_history.append(val_loss_val)
-            val_epochs_history.append(epoch)
+            result.val_loss_history.append(val_loss_val)
+            result.val_epochs.append(epoch)
 
         # Early stopping
         monitor = val_loss_val if val_t is not None else loss_val
@@ -439,6 +590,8 @@ def train_differences(
                 best_loss = monitor
                 best_param_state = {k: v.clone() for k, v in param_dict.state_dict().items()}
                 best_net_state = {k: v.clone() for k, v in network.state_dict().items()}
+                result.best_loss = best_loss
+                result.best_epoch = epoch
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
@@ -447,19 +600,25 @@ def train_differences(
                 if best_param_state is not None:
                     param_dict.load_state_dict(best_param_state)
                     network.load_state_dict(best_net_state)
-                if verbose:
+                result.stopped_early = True
+                if verbose and not progress_bar:
                     label = "val" if val_t is not None else "train"
                     print(f"Early stopping at epoch {epoch}. Best {label} loss: {best_loss:.6f}")
                 break
+        elif not patience:
+            if loss_val < best_loss:
+                best_loss = loss_val
+                result.best_loss = best_loss
+                result.best_epoch = epoch
 
-        if verbose and epoch % log_interval == 0:
+        if verbose and not progress_bar and epoch % log_interval == 0:
             msg = f"Epoch {epoch:>5d}/{epochs}  loss={loss_val:.6f}"
             if val_loss_val is not None:
                 msg += f"  val_loss={val_loss_val:.6f}"
             print(msg)
 
-    return {
-        "train_loss": train_loss_history,
-        "val_loss": val_loss_history,
-        "val_epochs": val_epochs_history,
-    }
+        if hasattr(epoch_range, 'set_postfix'):
+            epoch_range.set_postfix(loss=f"{loss_val:.6f}")
+
+    result.epochs_run = len(result.loss_history)
+    return result

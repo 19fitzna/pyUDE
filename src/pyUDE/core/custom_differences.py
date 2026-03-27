@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Union
 
 import pandas as pd
 import torch
@@ -100,6 +100,8 @@ class CustomDifferences(UDEModel):
         val_data: Optional[pd.DataFrame] = None,
         val_interval: int = 1,
         lambda_l1: float = 0.0,
+        scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
+        progress_bar: bool = False,
         **kwargs,
     ) -> "CustomDifferences":
         """Train by minimising one-step-ahead MSE across the time series."""
@@ -130,7 +132,7 @@ class CustomDifferences(UDEModel):
             validate_dataframe(val_data, self._time_column)
             val_t, val_u, _ = dataframe_to_tensors(val_data, self._time_column)
 
-        history = train_differences(
+        self.train_result_ = train_differences(
             model=self,
             optimizer_name=optimizer,
             learning_rate=learning_rate,
@@ -144,9 +146,11 @@ class CustomDifferences(UDEModel):
             val_u=val_u,
             val_interval=val_interval,
             lambda_l1=lambda_l1,
+            scheduler=scheduler,
+            progress_bar=progress_bar,
         )
         self._is_trained = True
-        self._merge_history(history)
+        self._merge_history(self.train_result_.to_dict())
         return self
 
     def forecast(self, steps: int, initial_state=None, **kwargs):

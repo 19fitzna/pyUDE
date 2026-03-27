@@ -10,6 +10,7 @@ from pyUDE.analysis.forecast import forecast
 from pyUDE.analysis.dynamics import get_right_hand_side
 from pyUDE.utils.splitting import train_test_split, time_series_cv
 from pyUDE.analysis.metrics import score, mse, rmse, mae, r2_score
+from pyUDE.training.trainer import TrainResult
 
 __all__ = [
     "NODE",
@@ -24,6 +25,7 @@ __all__ = [
     "rmse",
     "mae",
     "r2_score",
+    "TrainResult",
 ]
 
 # Julia backend — only available when juliacall is installed
