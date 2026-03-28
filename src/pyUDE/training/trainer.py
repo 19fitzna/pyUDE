@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -172,6 +174,12 @@ def train_model(
     lambda_l1: float = 0.0,
     scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
     progress_bar: bool = False,
+    n_shooting_segments: int = 10,
+    pred_length: Optional[int] = None,
+    proc_weight: float = 1.0,
+    obs_weight: float = 1.0,
+    obs_cov: Optional[torch.Tensor] = None,
+    proc_cov: Optional[torch.Tensor] = None,
     **kwargs,
 ) -> TrainResult:
     """Train a continuous-time UDE model (NODE or CustomDerivatives).
@@ -190,15 +198,23 @@ def train_model(
         val_t = val_t.to(device)
         val_u = val_u.to(device)
 
+    if obs_cov is not None:
+        obs_cov = obs_cov.to(device)
+    if proc_cov is not None:
+        proc_cov = proc_cov.to(device)
+
     # Param bounds for CustomDerivatives (accessed via ode_func.params)
     param_bounds = getattr(model, '_param_bounds', None)
 
-    optimizer = _make_optimizer(ode_func.parameters(), optimizer_name, learning_rate,
-                                weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
-    sched = _make_scheduler(optimizer, scheduler, epochs)
+
+    valid_losses = ("simulation", "derivative_matching", "multiple_shooting",
+                    "conditional_likelihood")
 
     if loss == "simulation":
+        optimizer = _make_optimizer(ode_func.parameters(), optimizer_name,
+                                    learning_rate, weight_decay=weight_decay)
+        sched = _make_scheduler(optimizer, scheduler, epochs)
         try:
             from torchdiffeq import odeint_adjoint as odeint
         except ImportError as e:
@@ -213,8 +229,12 @@ def train_model(
             rtol=rtol, atol=atol,
             val_t=val_t, val_u=val_u, val_interval=val_interval,
             lambda_l1=lambda_l1, param_bounds=param_bounds,
+            obs_weight=obs_weight,
         )
     elif loss == "derivative_matching":
+        optimizer = _make_optimizer(ode_func.parameters(), optimizer_name,
+                                    learning_rate, weight_decay=weight_decay)
+        sched = _make_scheduler(optimizer, scheduler, epochs)
         return _train_derivative_matching(
             ode_func, t, u_obs, optimizer, loss_fn,
             epochs, log_interval, verbose, patience, max_grad_norm,
@@ -223,8 +243,62 @@ def train_model(
             val_t=val_t, val_u=val_u, val_interval=val_interval,
             lambda_l1=lambda_l1, param_bounds=param_bounds,
         )
+    elif loss == "multiple_shooting":
+        try:
+            from torchdiffeq import odeint_adjoint as odeint
+        except ImportError as e:
+            raise ImportError(
+                "torchdiffeq is required for multiple shooting loss. "
+                "Install with: pip install torchdiffeq"
+            ) from e
+        # Resolve n_segments from pred_length if provided
+        if pred_length is not None:
+            n_segments = max(1, math.ceil(len(t) / pred_length))
+        else:
+            n_segments = n_shooting_segments
+        return _train_multiple_shooting(
+            ode_func, t, u_obs, optimizer_name, learning_rate, weight_decay,
+            loss_fn, odeint,
+            solver, epochs, log_interval, verbose, patience, max_grad_norm,
+            scheduler, progress_bar,
+            n_segments=n_segments,
+            proc_weight=proc_weight, obs_weight=obs_weight,
+            rtol=rtol, atol=atol,
+            val_t=val_t, val_u=val_u, val_interval=val_interval,
+            lambda_l1=lambda_l1, param_bounds=param_bounds,
+        )
+    elif loss == "conditional_likelihood":
+        if obs_cov is None or proc_cov is None:
+            raise ValueError(
+                "conditional_likelihood requires both obs_covariance and "
+                "proc_covariance. Set them on the model constructor or pass "
+                "them to train()."
+            )
+        optimizer = _make_optimizer(ode_func.parameters(), optimizer_name,
+                                    learning_rate, weight_decay=weight_decay)
+        sched = _make_scheduler(optimizer, scheduler, epochs)
+        try:
+            from torchdiffeq import odeint_adjoint as odeint
+        except ImportError as e:
+            raise ImportError(
+                "torchdiffeq is required for conditional likelihood loss. "
+                "Install with: pip install torchdiffeq"
+            ) from e
+        result = _train_conditional_likelihood(
+            model, ode_func, t, u_obs, optimizer, odeint,
+            solver, epochs, log_interval, verbose, patience, max_grad_norm,
+            sched, progress_bar,
+            obs_cov=obs_cov, proc_cov=proc_cov,
+            proc_weight=proc_weight, obs_weight=obs_weight,
+            rtol=rtol, atol=atol,
+            val_t=val_t, val_u=val_u, val_interval=val_interval,
+            lambda_l1=lambda_l1, param_bounds=param_bounds,
+        )
+        return result
     else:
-        raise ValueError(f"Unknown loss '{loss}'. Choose 'simulation' or 'derivative_matching'.")
+        raise ValueError(
+            f"Unknown loss '{loss}'. Choose from: {valid_losses}"
+        )
 
 
 def _train_simulation(
@@ -234,6 +308,7 @@ def _train_simulation(
     rtol=1e-3, atol=1e-6,
     val_t=None, val_u=None, val_interval=1,
     lambda_l1=0.0, param_bounds=None,
+    obs_weight=1.0,
 ) -> TrainResult:
     """Integrate ODE forward and compare to observations."""
     n_params = sum(1 for _ in ode_func.parameters())
@@ -252,7 +327,7 @@ def _train_simulation(
         u_pred = odeint(ode_func, u0, t, method=solver,
                         rtol=rtol, atol=atol,
                         adjoint_params=tuple(ode_func.parameters()))
-        loss = loss_fn(u_pred, u_obs)
+        loss = obs_weight * loss_fn(u_pred, u_obs)
 
         if lambda_l1 > 0:
             l1_penalty = sum(p.abs().sum() for p in ode_func.parameters())
@@ -463,6 +538,366 @@ def _train_derivative_matching(
 
 
 # ---------------------------------------------------------------------------
+# Multiple shooting
+# ---------------------------------------------------------------------------
+
+def _smooth_trajectory(t, u_obs):
+    """Return a spline-smoothed trajectory evaluated at times ``t``.
+
+    Falls back to the raw observations if scipy is unavailable.
+    """
+    try:
+        from scipy.interpolate import CubicSpline
+        t_np = t.detach().cpu().numpy()
+        u_np = u_obs.detach().cpu().numpy()
+        smoothed = np.zeros_like(u_np)
+        for col in range(u_np.shape[1]):
+            cs = CubicSpline(t_np, u_np[:, col])
+            smoothed[:, col] = cs(t_np)
+        return torch.tensor(smoothed, dtype=u_obs.dtype, device=u_obs.device)
+    except ImportError:
+        return u_obs.clone()
+
+
+def _train_multiple_shooting(
+    ode_func, t, u_obs,
+    optimizer_name, learning_rate, weight_decay,
+    loss_fn, odeint,
+    solver, epochs, log_interval, verbose, patience, max_grad_norm,
+    scheduler_spec, progress_bar,
+    n_segments=10,
+    proc_weight=1.0, obs_weight=1.0,
+    rtol=1e-3, atol=1e-6,
+    val_t=None, val_u=None, val_interval=1,
+    lambda_l1=0.0, param_bounds=None,
+) -> TrainResult:
+    """Divide trajectory into segments with learnable initial conditions.
+
+    Each segment is integrated independently.  The total loss combines
+    observation fit and continuity (segments must connect).  Continuity
+    loss is normalised by ``n_segments`` to prevent domination.
+    """
+    n_params = sum(1 for _ in ode_func.parameters())
+    assert n_params > 0, "No trainable parameters found in ODE function"
+
+    T = len(t)
+    n_segments = min(n_segments, T - 1)  # can't have more segments than gaps
+
+    # --- build segments ------------------------------------------------
+    # Each segment is a contiguous slice [start, end) of the time series.
+    seg_size = max(2, T // n_segments)
+    seg_starts = list(range(0, T, seg_size))
+    if seg_starts[-1] >= T - 1:
+        seg_starts = seg_starts[:-1]  # last segment must have ≥2 points
+    segments = []
+    for i, s in enumerate(seg_starts):
+        e = seg_starts[i + 1] if i + 1 < len(seg_starts) else T
+        segments.append((s, e))
+
+    n_seg = len(segments)
+
+    # --- shooting initial conditions -----------------------------------
+    # Initialise from cubic-spline-smoothed trajectory for robustness on
+    # noisy data; fallback to raw observations if scipy unavailable.
+    u_smooth = _smooth_trajectory(t, u_obs)
+    shooting_x0 = nn.ParameterList([
+        nn.Parameter(u_smooth[s].clone().detach())
+        for s, _e in segments
+    ])
+
+    # --- optimizer (includes shooting parameters) ----------------------
+    all_params = list(ode_func.parameters()) + list(shooting_x0.parameters())
+    optimizer = _make_optimizer(all_params, optimizer_name, learning_rate,
+                                weight_decay=weight_decay)
+    sched = _make_scheduler(optimizer, scheduler_spec, epochs)
+
+    best_loss = float('inf')
+    best_state = None
+    epochs_no_improve = 0
+    result = TrainResult()
+
+    epoch_range = _epoch_iter(epochs, progress_bar, desc="Multi-shoot")
+
+    for epoch in epoch_range:
+        optimizer.zero_grad()
+
+        total_obs_loss = torch.tensor(0.0, dtype=torch.float64, device=t.device)
+        total_cont_loss = torch.tensor(0.0, dtype=torch.float64, device=t.device)
+
+        for k, (s, e) in enumerate(segments):
+            t_seg = t[s:e]
+            u_seg = u_obs[s:e]
+            x0_k = shooting_x0[k]
+
+            u_pred_k = odeint(ode_func, x0_k, t_seg, method=solver,
+                              rtol=rtol, atol=atol,
+                              adjoint_params=tuple(ode_func.parameters()) + (x0_k,))
+
+            # Observation loss for this segment
+            total_obs_loss = total_obs_loss + loss_fn(u_pred_k, u_seg)
+
+            # Continuity loss: end of this segment must match start of next
+            if k + 1 < n_seg:
+                x0_next = shooting_x0[k + 1]
+                total_cont_loss = total_cont_loss + loss_fn(
+                    u_pred_k[-1].unsqueeze(0), x0_next.unsqueeze(0)
+                )
+
+        loss = obs_weight * total_obs_loss + (proc_weight / n_seg) * total_cont_loss
+
+        if lambda_l1 > 0:
+            l1_penalty = sum(p.abs().sum() for p in ode_func.parameters())
+            loss = loss + lambda_l1 * l1_penalty
+
+        if torch.isnan(loss):
+            if verbose and not progress_bar:
+                print(f"NaN loss detected at epoch {epoch}. Stopping training.")
+            break
+
+        loss.backward()
+
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(all_params, max_norm=max_grad_norm)
+
+        optimizer.step()
+        _step_scheduler(sched, loss.item())
+
+        if param_bounds and hasattr(ode_func, 'params'):
+            _clamp_params(ode_func.params, param_bounds)
+
+        loss_val = loss.item()
+        result.loss_history.append(loss_val)
+
+        # Validation loss (single-shooting from last training point)
+        val_loss_val = None
+        if val_t is not None and epoch % val_interval == 0:
+            with torch.no_grad():
+                t_combined = torch.cat([t[-1:], val_t])
+                u_extended = odeint(ode_func, u_obs[-1], t_combined, method=solver,
+                                    rtol=rtol, atol=atol)
+                u_val_pred = u_extended[1:]
+                val_loss_val = loss_fn(u_val_pred, val_u).item()
+            result.val_loss_history.append(val_loss_val)
+            result.val_epochs.append(epoch)
+
+        # Early stopping
+        monitor = val_loss_val if val_t is not None else loss_val
+        if monitor is not None and patience:
+            if monitor < best_loss:
+                best_loss = monitor
+                best_state = {k: v.clone() for k, v in ode_func.state_dict().items()}
+                result.best_loss = best_loss
+                result.best_epoch = epoch
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+
+            if epochs_no_improve >= patience:
+                if best_state is not None:
+                    ode_func.load_state_dict(best_state)
+                result.stopped_early = True
+                if verbose and not progress_bar:
+                    label = "val" if val_t is not None else "train"
+                    print(f"Early stopping at epoch {epoch}. Best {label} loss: {best_loss:.6f}")
+                break
+        elif not patience:
+            if loss_val < best_loss:
+                best_loss = loss_val
+                result.best_loss = best_loss
+                result.best_epoch = epoch
+
+        if verbose and not progress_bar and epoch % log_interval == 0:
+            msg = f"Epoch {epoch:>5d}/{epochs}  loss={loss_val:.6f}"
+            if val_loss_val is not None:
+                msg += f"  val_loss={val_loss_val:.6f}"
+            print(msg)
+
+        if hasattr(epoch_range, 'set_postfix'):
+            epoch_range.set_postfix(loss=f"{loss_val:.6f}")
+
+    result.epochs_run = len(result.loss_history)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Conditional likelihood (Extended Kalman Filter)
+# ---------------------------------------------------------------------------
+
+def _train_conditional_likelihood(
+    model, ode_func, t, u_obs, optimizer, odeint,
+    solver, epochs, log_interval, verbose, patience, max_grad_norm,
+    scheduler, progress_bar,
+    obs_cov, proc_cov,
+    proc_weight=1.0, obs_weight=1.0,
+    rtol=1e-3, atol=1e-6,
+    val_t=None, val_u=None, val_interval=1,
+    lambda_l1=0.0, param_bounds=None,
+) -> TrainResult:
+    """EKF-based conditional likelihood loss.
+
+    At each time step the Extended Kalman Filter predicts the state via ODE
+    integration, computes the innovation (observation minus prediction), and
+    updates using the Kalman gain.  The loss is the negative log-likelihood
+    of the innovations under the predicted covariance.
+
+    Computational cost is O(T * n_states^3) per epoch due to Jacobian and
+    matrix operations.  For high-dimensional systems (50+ states) prefer
+    ``multiple_shooting`` or ``simulation`` loss.
+    """
+    n_params = sum(1 for _ in ode_func.parameters())
+    assert n_params > 0, "No trainable parameters found in ODE function"
+
+    T = len(t)
+    n = u_obs.shape[1]
+    device = t.device
+
+    best_loss = float('inf')
+    best_state = None
+    epochs_no_improve = 0
+    result = TrainResult()
+
+    epoch_range = _epoch_iter(epochs, progress_bar, desc="Cond. likelihood")
+
+    I_n = torch.eye(n, dtype=torch.float64, device=device)
+
+    for epoch in epoch_range:
+        optimizer.zero_grad()
+
+        # Initial state estimate and covariance
+        x_hat = u_obs[0].clone()
+        P = obs_cov.clone()  # P_0 = Σ_obs
+
+        total_nll = torch.tensor(0.0, dtype=torch.float64, device=device)
+        state_estimates = [x_hat.detach().clone()]
+
+        for k in range(1, T):
+            # 1. Predict: integrate ODE from t_{k-1} to t_k
+            t_seg = torch.stack([t[k - 1], t[k]])
+            x_pred_traj = odeint(ode_func, x_hat, t_seg, method=solver,
+                                 rtol=rtol, atol=atol,
+                                 adjoint_params=tuple(ode_func.parameters()))
+            x_pred = x_pred_traj[-1]  # predicted state at t_k
+
+            # 2. Jacobian of ode_func w.r.t. state (for covariance propagation)
+            with torch.enable_grad():
+                x_for_jac = x_hat.detach().requires_grad_(True)
+                F_k = torch.autograd.functional.jacobian(
+                    lambda x: ode_func(t[k - 1], x), x_for_jac,
+                    vectorize=True,
+                )
+
+            # Approximate state transition matrix: I + F * dt
+            dt_k = t[k] - t[k - 1]
+            Phi_k = I_n + F_k * dt_k
+
+            # 3. Covariance predict
+            P_pred = Phi_k @ P @ Phi_k.T + proc_cov
+
+            # 4. Innovation
+            v_k = u_obs[k] - x_pred
+
+            # 5. Innovation covariance
+            S_k = P_pred + obs_cov
+
+            # 6. Kalman gain via solve (numerically stable)
+            K_k = torch.linalg.solve(S_k.T, P_pred.T).T
+
+            # 7. State update
+            x_hat = x_pred + K_k @ v_k
+
+            # 8. Covariance update (Joseph form for numerical stability)
+            IKH = I_n - K_k
+            P = IKH @ P_pred @ IKH.T + K_k @ obs_cov @ K_k.T
+
+            # 9. Negative log-likelihood contribution
+            # -log N(v; 0, S) = 0.5 * (v^T S^{-1} v + log|S|) + const
+            v_Sinv_v = v_k @ torch.linalg.solve(S_k, v_k)
+            _, log_det_S = torch.linalg.slogdet(S_k)
+            nll_k = 0.5 * (v_Sinv_v + log_det_S)
+
+            total_nll = total_nll + nll_k
+            state_estimates.append(x_hat.detach().clone())
+
+        loss = obs_weight * total_nll
+
+        if lambda_l1 > 0:
+            l1_penalty = sum(p.abs().sum() for p in ode_func.parameters())
+            loss = loss + lambda_l1 * l1_penalty
+
+        if torch.isnan(loss):
+            if verbose and not progress_bar:
+                print(f"NaN loss detected at epoch {epoch}. Stopping training.")
+            break
+
+        loss.backward()
+
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(ode_func.parameters(), max_norm=max_grad_norm)
+
+        optimizer.step()
+        _step_scheduler(scheduler, loss.item())
+
+        if param_bounds and hasattr(ode_func, 'params'):
+            _clamp_params(ode_func.params, param_bounds)
+
+        loss_val = loss.item()
+        result.loss_history.append(loss_val)
+
+        # Validation loss (simulation-based for simplicity)
+        val_loss_val = None
+        if val_t is not None and epoch % val_interval == 0:
+            with torch.no_grad():
+                t_combined = torch.cat([t[-1:], val_t])
+                u_extended = odeint(ode_func, u_obs[-1], t_combined, method=solver,
+                                    rtol=rtol, atol=atol)
+                u_val_pred = u_extended[1:]
+                val_loss_val = nn.MSELoss()(u_val_pred, val_u).item()
+            result.val_loss_history.append(val_loss_val)
+            result.val_epochs.append(epoch)
+
+        # Early stopping
+        monitor = val_loss_val if val_t is not None else loss_val
+        if monitor is not None and patience:
+            if monitor < best_loss:
+                best_loss = monitor
+                best_state = {k_: v.clone() for k_, v in ode_func.state_dict().items()}
+                result.best_loss = best_loss
+                result.best_epoch = epoch
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+
+            if epochs_no_improve >= patience:
+                if best_state is not None:
+                    ode_func.load_state_dict(best_state)
+                result.stopped_early = True
+                if verbose and not progress_bar:
+                    label = "val" if val_t is not None else "train"
+                    print(f"Early stopping at epoch {epoch}. Best {label} loss: {best_loss:.6f}")
+                break
+        elif not patience:
+            if loss_val < best_loss:
+                best_loss = loss_val
+                result.best_loss = best_loss
+                result.best_epoch = epoch
+
+        if verbose and not progress_bar and epoch % log_interval == 0:
+            msg = f"Epoch {epoch:>5d}/{epochs}  loss={loss_val:.6f}"
+            if val_loss_val is not None:
+                msg += f"  val_loss={val_loss_val:.6f}"
+            print(msg)
+
+        if hasattr(epoch_range, 'set_postfix'):
+            epoch_range.set_postfix(loss=f"{loss_val:.6f}")
+
+    # Store final state estimates on the model
+    model._state_estimates = torch.stack(state_estimates)
+
+    result.epochs_run = len(result.loss_history)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Discrete-time training
 # ---------------------------------------------------------------------------
 
@@ -482,6 +917,7 @@ def train_differences(
     lambda_l1: float = 0.0,
     scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
     progress_bar: bool = False,
+    obs_weight: float = 1.0,
 ) -> TrainResult:
     """Train a discrete-time UDE model by minimising one-step-ahead MSE.
 
@@ -542,7 +978,7 @@ def train_differences(
                 for i in range(len(u_in))
             ])
 
-        loss = loss_fn(u_next_pred, u_target)
+        loss = obs_weight * loss_fn(u_next_pred, u_target)
 
         if lambda_l1 > 0:
             l1_penalty = sum(p_.abs().sum() for p_ in all_params)

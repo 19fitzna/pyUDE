@@ -102,10 +102,23 @@ class CustomDifferences(UDEModel):
         lambda_l1: float = 0.0,
         scheduler: Optional[Union[str, torch.optim.lr_scheduler.LRScheduler]] = None,
         progress_bar: bool = False,
+        obs_weight: Optional[float] = None,
+        loss: str = "one_step",
         **kwargs,
     ) -> "CustomDifferences":
         """Train by minimising one-step-ahead MSE across the time series."""
+        if loss in ("conditional_likelihood", "multiple_shooting"):
+            raise ValueError(
+                f"loss='{loss}' requires ODE integration and is not supported "
+                f"for discrete-time models. Use loss='one_step' (default)."
+            )
+
         from pyUDE.training.trainer import train_differences
+
+        # Clear stale state estimates
+        self._state_estimates = None
+
+        eff_obs_weight = obs_weight if obs_weight is not None else self._obs_weight
 
         if not hasattr(self, '_param_dict'):
             self._param_dict = nn.ParameterDict({
@@ -148,6 +161,7 @@ class CustomDifferences(UDEModel):
             lambda_l1=lambda_l1,
             scheduler=scheduler,
             progress_bar=progress_bar,
+            obs_weight=eff_obs_weight,
         )
         self._is_trained = True
         self._merge_history(self.train_result_.to_dict())
