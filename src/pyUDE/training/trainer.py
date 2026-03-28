@@ -270,8 +270,8 @@ def train_model(
     elif loss == "conditional_likelihood":
         if obs_cov is None or proc_cov is None:
             raise ValueError(
-                "conditional_likelihood requires both obs_covariance and "
-                "proc_covariance. Set them on the model constructor or pass "
+                "conditional_likelihood requires both observation_error and "
+                "process_error. Set them on the model constructor or pass "
                 "them to train()."
             )
         optimizer = _make_optimizer(ode_func.parameters(), optimizer_name,

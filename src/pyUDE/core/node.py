@@ -75,8 +75,8 @@ class NODE(UDEModel):
         time_column: str = "time",
         device: str = "cpu",
         dropout: float = 0.0,
-        obs_covariance: Optional[Union[float, torch.Tensor]] = None,
-        proc_covariance: Optional[Union[float, torch.Tensor]] = None,
+        observation_error: Optional[Union[float, torch.Tensor]] = None,
+        process_error: Optional[Union[float, torch.Tensor]] = None,
         proc_weight: float = 1.0,
         obs_weight: float = 1.0,
     ):
@@ -84,8 +84,8 @@ class NODE(UDEModel):
             raise ValueError(f"dropout must be in [0, 1), got {dropout!r}.")
         super().__init__(
             data, time_column, device,
-            obs_covariance=obs_covariance,
-            proc_covariance=proc_covariance,
+            observation_error=observation_error,
+            process_error=process_error,
             proc_weight=proc_weight,
             obs_weight=obs_weight,
         )

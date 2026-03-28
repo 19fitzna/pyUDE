@@ -94,19 +94,19 @@ class TestCovarianceNormalization:
 # ---------------------------------------------------------------------------
 
 class TestBaseClassProperties:
-    def test_obs_covariance_stored(self, simple_decay):
-        model = ude.NODE(simple_decay, obs_covariance=0.1)
-        assert model.obs_covariance is not None
-        assert model.obs_covariance.shape == (1, 1)
+    def test_observation_error_stored(self, simple_decay):
+        model = ude.NODE(simple_decay, observation_error=0.1)
+        assert model.observation_error is not None
+        assert model.observation_error.shape == (1, 1)
 
-    def test_proc_covariance_stored(self, simple_decay):
-        model = ude.NODE(simple_decay, proc_covariance=0.05)
-        assert model.proc_covariance is not None
+    def test_process_error_stored(self, simple_decay):
+        model = ude.NODE(simple_decay, process_error=0.05)
+        assert model.process_error is not None
 
     def test_default_covariances_are_none(self, simple_decay):
         model = ude.NODE(simple_decay)
-        assert model.obs_covariance is None
-        assert model.proc_covariance is None
+        assert model.observation_error is None
+        assert model.process_error is None
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ class TestConditionalLikelihood:
         model = ude.NODE(
             simple_decay,
             hidden_units=16, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(
             loss="conditional_likelihood",
@@ -184,14 +184,14 @@ class TestConditionalLikelihood:
 
     def test_requires_covariances(self, simple_decay):
         model = ude.NODE(simple_decay, hidden_units=16, hidden_layers=1)
-        with pytest.raises(ValueError, match="obs_covariance"):
+        with pytest.raises(ValueError, match="observation_error"):
             model.train(loss="conditional_likelihood", epochs=5, verbose=False)
 
     def test_state_estimates_stored(self, simple_decay):
         model = ude.NODE(
             simple_decay,
             hidden_units=16, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(
             loss="conditional_likelihood",
@@ -206,7 +206,7 @@ class TestConditionalLikelihood:
         model = ude.NODE(
             simple_decay,
             hidden_units=16, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(loss="conditional_likelihood", epochs=3, verbose=False, solver="rk4")
         est_1 = model._state_estimates.clone()
@@ -218,16 +218,16 @@ class TestConditionalLikelihood:
         assert est_2 is not None
 
     def test_covariance_magnitude_affects_estimates(self, simple_decay):
-        """Different obs_covariance should produce different state estimates."""
+        """Different observation_error should produce different state estimates."""
         model_low = ude.NODE(
             simple_decay, hidden_units=16, hidden_layers=1,
-            obs_covariance=0.001, proc_covariance=0.001,
+            observation_error=0.001, process_error=0.001,
         )
         model_low.train(loss="conditional_likelihood", epochs=5, verbose=False, solver="rk4")
 
         model_high = ude.NODE(
             simple_decay, hidden_units=16, hidden_layers=1,
-            obs_covariance=1.0, proc_covariance=0.001,
+            observation_error=1.0, process_error=0.001,
         )
         model_high.train(loss="conditional_likelihood", epochs=5, verbose=False, solver="rk4")
 
@@ -303,7 +303,7 @@ class TestStateEstimates:
         """With conditional likelihood, returns Kalman-filtered estimates."""
         model = ude.NODE(
             simple_decay, hidden_units=16, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(loss="conditional_likelihood", epochs=5, verbose=False, solver="rk4")
 
@@ -350,7 +350,7 @@ class TestSaveLoadCovariance:
         model = ude.NODE(
             simple_decay,
             hidden_units=16, hidden_layers=1,
-            obs_covariance=0.1, proc_covariance=0.05,
+            observation_error=0.1, process_error=0.05,
             obs_weight=2.0, proc_weight=0.5,
         )
         model.train(epochs=10, verbose=False, solver="rk4")
@@ -363,9 +363,9 @@ class TestSaveLoadCovariance:
         model2.load_weights(path)
 
         assert model2.is_trained
-        assert model2.obs_covariance is not None
-        assert torch.allclose(model2.obs_covariance, model.obs_covariance)
-        assert torch.allclose(model2.proc_covariance, model.proc_covariance)
+        assert model2.observation_error is not None
+        assert torch.allclose(model2.observation_error, model.observation_error)
+        assert torch.allclose(model2.process_error, model.process_error)
         assert model2._proc_weight == 0.5
         assert model2._obs_weight == 2.0
 
@@ -384,7 +384,7 @@ class TestEKFStability:
 
         model = ude.NODE(
             data, hidden_units=16, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(loss="conditional_likelihood", epochs=5, verbose=False, solver="rk4")
 
@@ -410,7 +410,7 @@ class TestCustomDerivativesConditionalLikelihood:
         model = ude.CustomDerivatives(
             data, known, {"k": 0.3},
             hidden_units=8, hidden_layers=1,
-            obs_covariance=0.01, proc_covariance=0.001,
+            observation_error=0.01, process_error=0.001,
         )
         model.train(
             loss="conditional_likelihood",

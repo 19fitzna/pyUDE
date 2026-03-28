@@ -67,13 +67,13 @@ class UDEModel(ABC):
         Name of the time column.
     device : str
         PyTorch device.
-    obs_covariance : float, Tensor, or None
+    observation_error : float, Tensor, or None
         Observation noise covariance Σ_obs.  Scalar and 1-D inputs are
         interpreted as **variances** (diagonal elements), not standard
         deviations.  Required for ``loss="conditional_likelihood"``.
-    proc_covariance : float, Tensor, or None
+    process_error : float, Tensor, or None
         Process noise covariance Σ_proc.  Same conventions as
-        ``obs_covariance``.
+        ``observation_error``.
     proc_weight : float
         Weight for process-model terms in state-space losses (default 1.0).
     obs_weight : float
@@ -85,8 +85,8 @@ class UDEModel(ABC):
         data: pd.DataFrame,
         time_column: str = "time",
         device: str = "cpu",
-        obs_covariance: Optional[Union[float, torch.Tensor]] = None,
-        proc_covariance: Optional[Union[float, torch.Tensor]] = None,
+        observation_error: Optional[Union[float, torch.Tensor]] = None,
+        process_error: Optional[Union[float, torch.Tensor]] = None,
         proc_weight: float = 1.0,
         obs_weight: float = 1.0,
     ):
@@ -99,8 +99,8 @@ class UDEModel(ABC):
         self._device: torch.device = torch.device(device)
 
         # Noise covariances
-        self._obs_cov = _normalize_covariance(obs_covariance, self._n_states)
-        self._proc_cov = _normalize_covariance(proc_covariance, self._n_states)
+        self._obs_err = _normalize_covariance(observation_error, self._n_states)
+        self._proc_err = _normalize_covariance(process_error, self._n_states)
         self._proc_weight: float = float(proc_weight)
         self._obs_weight: float = float(obs_weight)
 
@@ -164,7 +164,7 @@ class UDEModel(ABC):
               continuity losses.
             * ``"conditional_likelihood"`` — Extended Kalman Filter-based
               loss that separates observation noise from process noise.
-              Requires ``obs_covariance`` and ``proc_covariance``.
+              Requires ``observation_error`` and ``process_error``.
         optimizer : str
             Optimizer name (``"adam"`` or ``"sgd"``).
         learning_rate : float
@@ -263,8 +263,8 @@ class UDEModel(ABC):
             pred_length=pred_length,
             proc_weight=eff_proc_weight,
             obs_weight=eff_obs_weight,
-            obs_cov=self._obs_cov,
-            proc_cov=self._proc_cov,
+            obs_cov=self._obs_err,
+            proc_cov=self._proc_err,
             **kwargs,
         )
         self._is_trained = True
@@ -424,8 +424,8 @@ class UDEModel(ABC):
             'time_column': self._time_column,
             'solver': self._solver,
             'class': self.__class__.__name__,
-            'obs_cov': self._obs_cov,
-            'proc_cov': self._proc_cov,
+            'obs_cov': self._obs_err,
+            'proc_cov': self._proc_err,
             'proc_weight': self._proc_weight,
             'obs_weight': self._obs_weight,
         }, path)
@@ -454,9 +454,9 @@ class UDEModel(ABC):
         self._solver = checkpoint.get('solver', 'dopri5')
         # Restore covariance settings from checkpoint (backwards-compatible)
         if checkpoint.get('obs_cov') is not None:
-            self._obs_cov = checkpoint['obs_cov']
+            self._obs_err = checkpoint['obs_cov']
         if checkpoint.get('proc_cov') is not None:
-            self._proc_cov = checkpoint['proc_cov']
+            self._proc_err = checkpoint['proc_cov']
         self._proc_weight = checkpoint.get('proc_weight', 1.0)
         self._obs_weight = checkpoint.get('obs_weight', 1.0)
         self._is_trained = True
@@ -503,14 +503,14 @@ class UDEModel(ABC):
         return self._time_column
 
     @property
-    def obs_covariance(self) -> Optional[torch.Tensor]:
+    def observation_error(self) -> Optional[torch.Tensor]:
         """Observation noise covariance matrix, or ``None``."""
-        return self._obs_cov
+        return self._obs_err
 
     @property
-    def proc_covariance(self) -> Optional[torch.Tensor]:
+    def process_error(self) -> Optional[torch.Tensor]:
         """Process noise covariance matrix, or ``None``."""
-        return self._proc_cov
+        return self._proc_err
 
     def _get_training_tensors(self):
         """Return ``(t, u)`` tensors from the training DataFrame."""
