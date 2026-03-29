@@ -31,6 +31,11 @@ notebook = [
     "jupyter>=1.0",
     "scipy>=1.10",
 ]
+docs = [
+    "mkdocs-material",
+    "pymdown-extensions",
+    "mkdocs-jupyter",
+]
 progress = [
     "tqdm>=4.60",
 ]
