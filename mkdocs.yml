@@ -42,14 +42,14 @@ nav:
       - Quickstart: guides/quickstart.md
       - Core Concepts: concepts.md
   - Tutorials:
-      - Quickstart: notebooks/01_quickstart.ipynb
-      - GPU Acceleration: notebooks/02_gpu_acceleration.ipynb
-      - Validation & Evaluation: notebooks/03_validation_evaluation.ipynb
-      - Regularization: notebooks/04_regularization.ipynb
-      - Cross-Validation: notebooks/05_cross_validation.ipynb
-      - Parameter Recovery: notebooks/06_parameter_recovery.ipynb
-      - Custom Networks: notebooks/07_custom_networks.ipynb
-      - Julia Backend: notebooks/08_julia_backend.ipynb
+      - Quickstart: tutorials/01_quickstart.ipynb
+      - GPU Acceleration: tutorials/02_gpu_acceleration.ipynb
+      - Validation & Evaluation: tutorials/03_validation_evaluation.ipynb
+      - Regularization: tutorials/04_regularization.ipynb
+      - Cross-Validation: tutorials/05_cross_validation.ipynb
+      - Parameter Recovery: tutorials/06_parameter_recovery.ipynb
+      - Custom Networks: tutorials/07_custom_networks.ipynb
+      - Julia Backend: tutorials/08_julia_backend.ipynb
   - Guides:
       - Choosing a Backend: choosing-backend.md
       - Writing known_dynamics: guides/known-dynamics.md
