@@ -25,7 +25,7 @@ def test_node_loss_decreases(simple_decay):
     import torch
     from torchdiffeq import odeint
 
-    t, u_obs, _ = model._get_training_tensors()
+    t, u_obs = model._get_training_tensors()
     ode_func = model._build_ode_func()
 
     # Loss before training

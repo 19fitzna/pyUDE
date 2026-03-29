@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Union
 
 import pandas as pd
 import torch
@@ -90,6 +90,10 @@ class CustomDerivatives(UDEModel):
         device: str = "cpu",
         dropout: float = 0.0,
         param_bounds: Optional[Dict] = None,
+        observation_error: Optional[Union[float, torch.Tensor]] = None,
+        process_error: Optional[Union[float, torch.Tensor]] = None,
+        proc_weight: float = 1.0,
+        obs_weight: float = 1.0,
     ):
         if not (0.0 <= dropout < 1.0):
             raise ValueError(f"dropout must be in [0, 1), got {dropout!r}.")
@@ -99,7 +103,13 @@ class CustomDerivatives(UDEModel):
                 raise ValueError(
                     f"param_bounds contains keys not in init_params: {sorted(extra)}"
                 )
-        super().__init__(data, time_column, device)
+        super().__init__(
+            data, time_column, device,
+            observation_error=observation_error,
+            process_error=process_error,
+            proc_weight=proc_weight,
+            obs_weight=obs_weight,
+        )
         self._known_dynamics = known_dynamics
         self._init_params = init_params
         self._network = network

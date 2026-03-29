@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -75,10 +75,20 @@ class NODE(UDEModel):
         time_column: str = "time",
         device: str = "cpu",
         dropout: float = 0.0,
+        observation_error: Optional[Union[float, torch.Tensor]] = None,
+        process_error: Optional[Union[float, torch.Tensor]] = None,
+        proc_weight: float = 1.0,
+        obs_weight: float = 1.0,
     ):
         if not (0.0 <= dropout < 1.0):
             raise ValueError(f"dropout must be in [0, 1), got {dropout!r}.")
-        super().__init__(data, time_column, device)
+        super().__init__(
+            data, time_column, device,
+            observation_error=observation_error,
+            process_error=process_error,
+            proc_weight=proc_weight,
+            obs_weight=obs_weight,
+        )
         self._network = network
         self._hidden_layers = hidden_layers
         self._hidden_units = hidden_units
